@@ -7,7 +7,7 @@ from dataclasses import dataclass, field, replace
 
 import pymupdf as fitz
 
-from . import extract, fontres, pdfobj
+from . import extract, fontres, pdfobj, textstate
 from .fonts import FontCatalog, FontFace, style_from_name
 from .geometry import from_display_point, from_display_vector, hex_to_rgb, shrink_for_redaction
 from .textwriter import FontChain, Glyph, PlacedLine, TextStyle, line_width, write_lines
@@ -97,6 +97,17 @@ def resolve_span_font(doc: fitz.Document, page: fitz.Page, span: dict) -> fontre
     return best if best.coverage(span["text"]) >= 0.6 else None
 
 
+def _record_font(doc: fitz.Document, span: dict) -> fontres.EmbeddedFont | None:
+    """The exact font object that drew the span (from the content stream)."""
+    record = span.get("record")
+    if record is None or not record.font_xref:
+        return None
+    font = fontres.analyze_font(doc, record.font_xref)
+    if font is None or font.coverage(span.get("primary_text", span["text"])) < 0.6:
+        return None
+    return font
+
+
 def _catalog_face(catalog: FontCatalog, face_id: str, bold: bool, italic: bool) -> FontFace:
     face = catalog.get(face_id)
     if face is None:
@@ -143,7 +154,7 @@ def plan_fonts(
             font_name = embedded.base_name
             base = {**base, **dict(zip(("bold", "italic"), style_from_name(font_name)))}
     elif span is not None:
-        embedded = resolve_span_font(doc, page, span)
+        embedded = _record_font(doc, span) or resolve_span_font(doc, page, span)
 
     substitute = catalog.substitute(font_name, bold, italic, base["serif"], base["mono"])
     chain = FontChain.build(catalog, embedded, substitute)
@@ -152,12 +163,21 @@ def plan_fonts(
     return _FontPlan(chain, bold and not base["bold"], italic and not base["italic"])
 
 
-def _style(request: StyleRequest, span: dict | None, plan: _FontPlan, default_size: float = 12.0) -> TextStyle:
+def _style(
+    request: StyleRequest,
+    span: dict | None,
+    plan: _FontPlan,
+    doc: fitz.Document | None = None,
+    page: fitz.Page | None = None,
+    default_size: float = 12.0,
+) -> TextStyle:
+    record = span.get("record") if span else None
+    if record is not None and doc is not None and page is not None:
+        return _exact_style(request, span, plan, record, doc, page)
     color_default = hex_to_rgb(extract.color_to_hex(span.get("color"))) if span else (0.0, 0.0, 0.0)
     opacity_default = span.get("alpha", 255) / 255.0 if span else 1.0
     size = request.size if request.size else (span["size"] if span else default_size)
-    if size <= 0 or size > 1000:
-        raise TextEditError("Font size must be between 0 and 1000 pt.")
+    _check_size(size)
     return TextStyle(
         size=size,
         color=hex_to_rgb(request.color, color_default),
@@ -169,6 +189,58 @@ def _style(request: StyleRequest, span: dict | None, plan: _FontPlan, default_si
         char_spacing=request.char_spacing or 0.0,
         hscale=max(10.0, min(400.0, request.hscale or 100.0)),
     )
+
+
+def _check_size(size: float) -> None:
+    if size <= 0 or size > 1000:
+        raise TextEditError("Font size must be between 0 and 1000 pt.")
+
+
+def _exact_style(request: StyleRequest, span: dict, plan: _FontPlan, record: textstate.TextRecord,
+                 doc: fitz.Document, page: fitz.Page) -> TextStyle:
+    """Reproduce the original text state exactly, applying only what the user changed."""
+    size = request.size or record.effective_size
+    _check_size(size)
+    scale = size / record.effective_size if record.effective_size else 1.0
+    color = hex_to_rgb(request.color, hex_to_rgb(extract.color_to_hex(span.get("color"))))
+    return TextStyle(
+        size=size,
+        color=color,
+        opacity=1.0 if request.opacity is None else max(0.0, min(1.0, request.opacity)),
+        bold_synth=plan.bold_synth,
+        italic_synth=plan.italic_synth,
+        underline=request.underline,
+        strike=request.strike,
+        char_spacing=record.page_char_spacing * scale if request.char_spacing is None else request.char_spacing,
+        hscale=max(10.0, min(400.0, request.hscale or record.effective_hscale)),
+        word_spacing=record.page_word_spacing * scale,
+        rise=record.page_rise * scale,
+        skew=record.skew,
+        render_mode=record.render_mode,
+        line_width=record.line_width * scale,
+        **bind_resources(request, record, doc, page),
+    )
+
+
+def bind_resources(request: StyleRequest, record: textstate.TextRecord, doc: fitz.Document, page: fitz.Page) -> dict:
+    """Colour operators and graphics states of the original, valid on this page.
+
+    Must run *after* redaction: MuPDF rebuilds the page resource dictionary when
+    applying redactions and drops entries that are not used yet.
+    """
+    fill_ops = stroke_ops = None
+    if request.color is None:
+        fill_ops = textstate.resolve_paint(doc, page, record.fill)
+        stroke_ops = textstate.resolve_paint(doc, page, record.stroke)
+    elif record.render_mode in (2, 6):
+        stroke_ops = textstate.resolve_paint(doc, page, record.stroke)
+    return {"fill_ops": fill_ops, "stroke_ops": stroke_ops,
+            "gstates": textstate.resolve_gstates(doc, page, record.gstates)}
+
+
+def _rebind(job: "_WriteJob", doc: fitz.Document, page: fitz.Page) -> None:
+    if job.record is not None:
+        job.style = replace(job.style, **bind_resources(job.request, job.record, doc, page))
 
 
 def _report(chain: FontChain) -> EditReport:
@@ -204,7 +276,7 @@ def redact_areas(page: fitz.Page, rects: list[fitz.Rect], fill: tuple | bool = F
         restored.update()
 
 
-def _auto_char_spacing(span: dict, chain: FontChain, size: float, hscale: float) -> float:
+def _auto_char_spacing(span: dict, chain: FontChain, style: TextStyle) -> float:
     """Detect letter spacing used by the original text so edits keep the rhythm."""
     text = span["text"]
     if chain.embedded is None or len(text.strip()) < 3:
@@ -216,9 +288,17 @@ def _auto_char_spacing(span: dict, chain: FontChain, size: float, hscale: float)
     real = [g for g in glyphs if g.font_key]
     if len(glyphs) != len(text) or not real or keys_before - {f"e{chain.embedded.xref}"}:
         return 0.0
-    natural = line_width(glyphs, TextStyle(size=size, hscale=hscale))
-    spacing = (_advance(span, (1.0, 0.0)) - natural) / len(real)
-    return round(spacing, 3) if size * 0.02 < abs(spacing) < size * 0.5 else 0.0
+    # Distance between the first and the last glyph origin: unaffected by glyph
+    # shapes (skew, overhangs), so it isolates the spacing that was applied.
+    direction = span["record"].direction if span.get("record") else (1.0, 0.0)
+    first, last = span["origin"], span.get("last_origin", span["origin"])
+    actual = (last[0] - first[0]) * direction[0] + (last[1] - first[1]) * direction[1]
+    natural = line_width(glyphs[:-1], replace(style, char_spacing=0.0))
+    counted = sum(1 for g in glyphs[:-1] if g.font_key)
+    if actual <= 0 or not counted:
+        return 0.0
+    spacing = (actual - natural) / counted / (style.hscale / 100.0)
+    return round(spacing, 3) if style.size * 0.02 < abs(spacing) < style.size * 0.5 else 0.0
 
 
 def _advance(span: dict, direction: tuple[float, float]) -> float:
@@ -232,6 +312,8 @@ class _WriteJob:
     glyphs: list[Glyph]
     style: TextStyle
     chain: FontChain
+    record: textstate.TextRecord | None = None
+    request: StyleRequest = field(default_factory=StyleRequest)
 
 
 def _span_job(
@@ -244,9 +326,11 @@ def _span_job(
     fit_width: bool = False,
 ) -> _WriteJob:
     plan = plan_fonts(doc, page, catalog, request, span)
-    style = _style(request, span, plan)
-    if request.char_spacing is None:
-        spacing = _auto_char_spacing(span, plan.chain, style.size, style.hscale)
+    style = _style(request, span, plan, doc, page)
+    record = span.get("record")
+    if request.char_spacing is None and (record is None or not record.char_spacing):
+        # Spacing done with TJ adjustments rather than Tc: measure it instead.
+        spacing = _auto_char_spacing(span, plan.chain, style)
         style = replace(style, char_spacing=spacing)
     glyphs = plan.chain.encode(text)
     if fit_width and glyphs:
@@ -254,7 +338,12 @@ def _span_job(
         if natural > 0:
             hscale = style.hscale * fitz.Rect(span["bbox"]).width / natural
             style = replace(style, hscale=max(30.0, min(300.0, hscale)))
-    return _WriteJob((span["origin"][0], span["origin"][1]), glyphs, style, plan.chain)
+    origin = (span["origin"][0], span["origin"][1])
+    if style.rise:
+        # MuPDF reports the raised glyph origin; the writer re-applies the rise (Ts).
+        direction = record.direction if record is not None else (1.0, 0.0)
+        origin = (origin[0] - direction[1] * style.rise, origin[1] + direction[0] * style.rise)
+    return _WriteJob(origin, glyphs, style, plan.chain, record, request)
 
 
 def _reflow_jobs(
@@ -317,6 +406,7 @@ def edit_span(doc: fitz.Document, page: fitz.Page, catalog: FontCatalog, edit: S
     rects = [shrink_for_redaction(fitz.Rect(s["bbox"]), direction) for s in [span] + [f[0] for f in followers]]
     redact_areas(page, rects)
     for job in [main] + [f[1] for f in followers]:
+        _rebind(job, doc, page)
         write_lines(doc, page, [PlacedLine(job.origin, direction, job.glyphs)], job.style, job.chain)
     return _report(main.chain)
 
@@ -386,18 +476,23 @@ def edit_block(doc: fitz.Document, page: fitz.Page, catalog: FontCatalog, edit: 
     lines = [line for line in block["lines"] if any(s["text"].strip() for s in line["spans"])]
     if not lines:
         raise TextEditError("The paragraph contains no editable text.")
-    first_span = max(
-        (s for s in lines[0]["spans"] if s["text"].strip()), key=lambda s: len(s["text"])
-    )
     direction = tuple(lines[0].get("dir", (1.0, 0.0)))
+    tagged = extract.tagged_font_names(page)
+    records = textstate.page_text_records(doc, page)
+    first_runs = extract.attach_records(doc, extract.line_runs(lines[0], tagged), direction, records, tagged)
+    first_span = max(first_runs, key=lambda s: len(s["text"]))
     plan = plan_fonts(doc, page, catalog, edit.style, first_span)
-    style = _style(edit.style, first_span, plan)
+    style = _style(edit.style, first_span, plan, doc, page)
     step = _line_step(lines, direction, style.size, edit.line_height)
     origin = _line_start(lines[0], direction)
+    if style.rise:
+        origin = (origin[0] - direction[1] * style.rise, origin[1] + direction[0] * style.rise)
     block_rect = fitz.Rect(block["bbox"])
     width = block_rect.width if abs(direction[0]) >= abs(direction[1]) else block_rect.height
     placed = _layout(plan.chain, edit.text, style, origin, direction, width + 0.5, step, edit.align)
     redact_areas(page, [shrink_for_redaction(fitz.Rect(line["bbox"]), direction) for line in lines])
+    if first_span.get("record") is not None:
+        style = replace(style, **bind_resources(edit.style, first_span["record"], doc, page))
     write_lines(doc, page, placed, style, plan.chain)
     return _report(plan.chain)
 
@@ -426,7 +521,7 @@ def add_text(doc: fitz.Document, page: fitz.Page, catalog: FontCatalog, item: Ne
     if item.style.font == "original":
         raise TextEditError("Choose a font for new text.")
     plan = plan_fonts(doc, page, catalog, item.style, None)
-    style = _style(item.style, None, plan)
+    style = _style(item.style, None, plan, doc, page)
     angle = item.rotation % 360
     display_dir = {0: (1.0, 0.0), 90: (0.0, -1.0), 180: (-1.0, 0.0), 270: (0.0, 1.0)}.get(angle, (1.0, 0.0))
     direction = from_display_vector(page, display_dir)

@@ -41,6 +41,24 @@ class TextStyle:
     strike: bool = False
     char_spacing: float = 0.0
     hscale: float = 100.0
+    # Exact original state (see textstate.py). When set they are written verbatim
+    # so the new text matches the old one operator for operator.
+    word_spacing: float = 0.0
+    rise: float = 0.0
+    skew: float = 0.0
+    render_mode: int | None = None
+    line_width: float | None = None
+    fill_ops: str | None = None
+    stroke_ops: str | None = None
+    gstates: tuple[str, ...] = ()
+
+
+_STROKE_OPS = {"g": "G", "rg": "RG", "k": "K", "cs": "CS", "sc": "SC", "scn": "SCN"}
+
+
+def to_stroke_ops(fill_ops: str) -> str:
+    """Turn fill colour operators into the equivalent stroke operators."""
+    return " ".join(_STROKE_OPS.get(token, token) for token in fill_ops.split())
 
 
 @dataclass
@@ -148,7 +166,7 @@ def line_width(glyphs: list[Glyph], style: TextStyle, space_extra: float = 0.0) 
         if glyph.font_key:
             total += style.char_spacing
         if glyph.char == " ":
-            total += space_extra
+            total += space_extra + style.word_spacing
     return total * scale
 
 
@@ -210,14 +228,18 @@ def _pdf_frame(page: fitz.Page, origin: tuple[float, float], direction: tuple[fl
     return o, dx / norm, dy / norm
 
 
-def _text_matrix(page: fitz.Page, line: PlacedLine, italic: bool) -> list[float]:
+def _text_matrix(page: fitz.Page, line: PlacedLine, style: TextStyle) -> list[float]:
     o, dx, dy = _pdf_frame(page, line.origin, line.direction)
-    skew = ITALIC_SKEW if italic else 0.0
+    skew = style.skew + (ITALIC_SKEW if style.italic_synth else 0.0)
     return [dx, dy, -dy + skew * dx, dx + skew * dy, o.x, o.y]
 
 
 def _tj_array(glyphs: list[Glyph], style: TextStyle, space_extra: float) -> list[tuple[str, str]]:
-    """Group glyphs into (font_key, TJ-array-body) runs."""
+    """Group glyphs into (font_key, TJ-array-body) runs.
+
+    Word spacing is applied by the ``Tw`` operator for single-byte space codes
+    (exactly like the original); other spaces get an equivalent TJ adjustment.
+    """
     runs: list[tuple[str, list[str]]] = []
     current_key: str | None = None
     for glyph in glyphs:
@@ -231,9 +253,28 @@ def _tj_array(glyphs: list[Glyph], style: TextStyle, space_extra: float) -> list
         else:
             gap = glyph.width + (style.char_spacing * 1000.0 / style.size if style.size else 0)
             parts.append(_fmt(-gap))
-        if glyph.char == " " and space_extra and style.size:
-            parts.append(_fmt(-space_extra * 1000.0 / style.size))
+        if glyph.char == " " and style.size:
+            extra = space_extra + (0.0 if glyph.code == b" " else style.word_spacing)
+            if extra:
+                parts.append(_fmt(-extra * 1000.0 / style.size))
     return [(key, " ".join(parts)) for key, parts in runs]
+
+
+def _paint_ops(style: TextStyle) -> tuple[str, str]:
+    if style.fill_ops:
+        fill = style.fill_ops
+    else:
+        r, g, b = (_fmt(c) for c in style.color)
+        fill = f"{r} {g} {b} rg"
+    stroke = style.stroke_ops or to_stroke_ops(fill)
+    return fill, stroke
+
+
+def _render_mode(style: TextStyle) -> int:
+    mode = 0 if style.render_mode is None else style.render_mode
+    if style.bold_synth and mode in (0, 4):
+        mode += 2  # fill -> fill + stroke
+    return mode
 
 
 def build_content(
@@ -243,20 +284,25 @@ def build_content(
     font_names: dict[str, str],
     gstate_name: str | None,
 ) -> bytes:
-    r, g, b = (_fmt(c) for c in style.color)
+    fill, stroke = _paint_ops(style)
     out: list[str] = ["q"]
+    out.extend(f"/{name} gs" for name in style.gstates)
     if gstate_name:
         out.append(f"/{gstate_name} gs")
-    out.append(f"{r} {g} {b} rg {r} {g} {b} RG")
+    out.append(f"{fill} {stroke}")
     if style.bold_synth:
         out.append(f"{_fmt(style.size * BOLD_STROKE)} w 1 j")
+    elif style.line_width is not None:
+        out.append(f"{_fmt(style.line_width)} w")
     for line in lines:
         if not line.glyphs:
             continue
-        matrix = _text_matrix(page, line, style.italic_synth)
+        matrix = _text_matrix(page, line, style)
         out.append("BT")
-        out.append(f"{2 if style.bold_synth else 0} Tr")
-        out.append(f"{_fmt(style.char_spacing)} Tc {_fmt(style.hscale)} Tz")
+        out.append(f"{_render_mode(style)} Tr")
+        out.append(f"{_fmt(style.char_spacing)} Tc {_fmt(style.word_spacing)} Tw {_fmt(style.hscale)} Tz")
+        if style.rise:
+            out.append(f"{_fmt(style.rise)} Ts")
         out.append(" ".join(_fmt(v) for v in matrix) + " Tm")
         fallback_name = next(iter(font_names.values()), None)
         for key, body in _tj_array(line.glyphs, style, line.space_extra):
@@ -265,24 +311,24 @@ def build_content(
                 continue
             out.append(f"/{name} {_fmt(style.size)} Tf [{body}] TJ")
         out.append("ET")
-        out.extend(_decorations(page, line, style))
+        out.extend(_decorations(page, line, style, to_stroke_ops(fill)))
     out.append("Q")
     return "\n".join(out).encode("latin-1")
 
 
-def _decorations(page: fitz.Page, line: PlacedLine, style: TextStyle) -> list[str]:
+def _decorations(page: fitz.Page, line: PlacedLine, style: TextStyle, stroke_ops: str) -> list[str]:
     if not (style.underline or style.strike):
         return []
     width = line_width(line.glyphs, style, line.space_extra)
     o, dx, dy = _pdf_frame(page, line.origin, line.direction)
     cm = " ".join(_fmt(v) for v in (dx, dy, -dy, dx, o.x, o.y))
     thickness = _fmt(max(style.size * 0.055, 0.4))
-    ops = [f"q {cm} cm {thickness} w 0 J"]
+    ops = [f"q {stroke_ops} {cm} cm {thickness} w 0 J"]
     if style.underline:
-        y = _fmt(-style.size * 0.12)
+        y = _fmt(style.rise - style.size * 0.12)
         ops.append(f"0 {y} m {_fmt(width)} {y} l S")
     if style.strike:
-        y = _fmt(style.size * 0.28)
+        y = _fmt(style.rise + style.size * 0.28)
         ops.append(f"0 {y} m {_fmt(width)} {y} l S")
     ops.append("Q")
     return ops

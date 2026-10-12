@@ -13,8 +13,8 @@ export function draftFromSpan(span: Span): SpanDraft {
     underline: false,
     strike: false,
     opacity: span.opacity,
-    charSpacing: null,
-    hscale: 100,
+    charSpacing: null, // null = keep the original spacing exactly
+    hscale: span.hscale || 100,
     fitWidth: false,
     reflow: true,
   };
@@ -29,7 +29,7 @@ export function styleFromDraft(span: Span, draft: SpanDraft): Partial<TextStyle>
   if (draft.italic !== span.italic) style.italic = draft.italic;
   if (Math.abs(draft.opacity - span.opacity) > 0.005) style.opacity = draft.opacity;
   if (draft.charSpacing !== null) style.char_spacing = draft.charSpacing;
-  if (Math.abs(draft.hscale - 100) > 0.01) style.hscale = draft.hscale;
+  if (Math.abs(draft.hscale - (span.hscale || 100)) > 0.01) style.hscale = draft.hscale;
   return style;
 }
 

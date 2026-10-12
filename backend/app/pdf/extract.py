@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pymupdf as fitz
 
-from . import pdfobj
+from . import pdfobj, textstate
 from .fontres import TAG_KEY, clean_font_name, normalize_font_name
 from .geometry import color_to_hex, to_display_point, to_display_rect, to_display_vector
 
@@ -21,7 +21,17 @@ FLAG_BOLD = 16
 
 
 def page_dict(page: fitz.Page) -> dict:
-    return page.get_text("dict", flags=TEXT_FLAGS)
+    """Text dict with span text plus the origin of each span's first non-space glyph."""
+    data = page.get_text("rawdict", flags=TEXT_FLAGS)
+    for block in data.get("blocks", []):
+        for line in block.get("lines", []):
+            for span in line.get("spans", []):
+                chars = span.pop("chars", [])
+                span["text"] = "".join(ch["c"] for ch in chars)
+                first = next((ch for ch in chars if not ch["c"].isspace()), None)
+                span["first_origin"] = tuple(first["origin"]) if first else tuple(span["origin"])
+                span["last_origin"] = tuple(chars[-1]["origin"]) if chars else tuple(span["origin"])
+    return data
 
 
 def span_style_flags(span: dict) -> dict:
@@ -91,15 +101,56 @@ def _start_run(span: dict, tagged: set[str]) -> dict:
 def _extend_run(run: dict, span: dict, tagged: set[str]) -> dict:
     is_tagged = normalize_font_name(span["font"]) in tagged
     merged = {**run, "text": run["text"] + span["text"], "bbox": tuple(fitz.Rect(run["bbox"]) | fitz.Rect(span["bbox"])),
-              "parts": run["parts"] + [span]}
+              "parts": run["parts"] + [span], "last_origin": span.get("last_origin", span["origin"])}
     if not is_tagged:
         merged["primary_text"] = run["primary_text"] + span["text"]
         if run["primary_tagged"]:
             # The run began with fallback glyphs: adopt this span's real font/style.
-            keep = {"text", "bbox", "origin", "parts", "primary_text"}
+            keep = {"text", "bbox", "origin", "parts", "primary_text", "last_origin"}
             merged.update({k: v for k, v in span.items() if k not in keep})
             merged["primary_tagged"] = False
     return merged
+
+
+def _primary_part(run: dict, tagged: set[str]) -> dict:
+    for part in run["parts"]:
+        if normalize_font_name(part["font"]) not in tagged:
+            return part
+    return run["parts"][0]
+
+
+def attach_records(doc: fitz.Document, runs: list[dict], direction: tuple, records: list, tagged: set[str]) -> list[dict]:
+    """Attach the exact text state (textstate.TextRecord) behind each run, if found."""
+    if not records:
+        return runs
+    result = []
+    for run in runs:
+        part = _primary_part(run, tagged)
+        origin = tuple(part.get("first_origin", part["origin"]))
+        record = textstate.match_record(records, origin, direction, part["font"], doc)
+        result.append({**run, "record": record})
+    return result
+
+
+def exact_style(doc: fitz.Document, page: fitz.Page, run: dict) -> dict:
+    """Exact style details for the UI (falls back to MuPDF's normalised values)."""
+    record = run.get("record")
+    if record is None:
+        return {"hscale": 100.0, "charSpacing": None, "wordSpacing": 0.0, "rise": 0.0, "render": "fill",
+                "renderMode": 0, "colorSpace": "RGB", "skew": 0.0, "exact": False}
+    return {
+        "size": round(record.effective_size, 2),
+        "hscale": round(record.effective_hscale, 2),
+        "charSpacing": round(record.page_char_spacing, 3),
+        "wordSpacing": round(record.page_word_spacing, 3),
+        "rise": round(record.page_rise, 3),
+        "render": textstate.RENDER_MODES.get(record.render_mode, "fill"),
+        "renderMode": record.render_mode,
+        "colorSpace": textstate.describe_paint(doc, page, record.stroke if record.render_mode in (1, 5) else record.fill),
+        "skew": round(record.skew, 3),
+        "opacity": round(textstate.fill_opacity(doc, page, record), 3),
+        "exact": True,
+    }
 
 
 def line_runs(line: dict, tagged: set[str]) -> list[dict]:
@@ -117,6 +168,8 @@ def line_runs(line: dict, tagged: set[str]) -> list[dict]:
 
 def page_text_model(page: fitz.Page) -> dict:
     tagged = tagged_font_names(page)
+    doc = page.parent
+    records = textstate.page_text_records(doc, page)
     blocks = []
     for b_index, block in enumerate(page_dict(page).get("blocks", [])):
         if block.get("type", 0) != 0:
@@ -124,9 +177,10 @@ def page_text_model(page: fitz.Page) -> dict:
         lines = []
         for l_index, line in enumerate(block.get("lines", [])):
             direction = tuple(line.get("dir", (1.0, 0.0)))
+            runs = attach_records(doc, line_runs(line, tagged), direction, records, tagged)
             spans = [
-                _span_model(page, run, f"{b_index}-{l_index}-{r_index}", direction)
-                for r_index, run in enumerate(line_runs(line, tagged))
+                {**_span_model(page, run, f"{b_index}-{l_index}-{r_index}", direction), **exact_style(doc, page, run)}
+                for r_index, run in enumerate(runs)
             ]
             if spans:
                 lines.append({
@@ -153,12 +207,13 @@ def find_span(page: fitz.Page, bbox: tuple, origin: tuple | None, text: str) -> 
     target.normalize()
     target_origin = fitz.Point(origin) * page.derotation_matrix if origin else None
     tagged = tagged_font_names(page)
+    records = textstate.page_text_records(page.parent, page)
     best: tuple[float, tuple[dict, list[dict], int]] | None = None
     for block in page_dict(page).get("blocks", []):
         if block.get("type", 0) != 0:
             continue
         for line in block.get("lines", []):
-            runs = line_runs(line, tagged)
+            runs = attach_records(page.parent, line_runs(line, tagged), tuple(line.get("dir", (1.0, 0.0))), records, tagged)
             for index, run in enumerate(runs):
                 score = _match_score(run, target, target_origin, text)
                 if score is not None and (best is None or score < best[0]):

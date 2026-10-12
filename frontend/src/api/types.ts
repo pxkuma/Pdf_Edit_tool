@@ -44,6 +44,16 @@ export interface Span {
   serif: boolean;
   mono: boolean;
   face: string | null;
+  /** Exact style recovered from the content stream (see backend textstate.py). */
+  exact: boolean;
+  hscale: number;
+  charSpacing: number | null;
+  wordSpacing: number;
+  rise: number;
+  render: string;
+  renderMode: number;
+  colorSpace: string;
+  skew: number;
 }
 
 export interface TextLine {

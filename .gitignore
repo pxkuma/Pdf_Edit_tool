@@ -5,3 +5,4 @@ __pycache__/
 backend/data/
 backend/static/
 *.pyc
+.coverage

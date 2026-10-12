@@ -57,13 +57,15 @@ class EmbeddedFont:
         return sum(1 for c in chars if c in self.reverse) / len(chars)
 
 
-def analyze_font(doc: fitz.Document, xref: int) -> EmbeddedFont | None:
+def analyze_font(doc: fitz.Document, xref: int, verify: bool = True) -> EmbeddedFont | None:
+    """Analyse a font object. ``verify`` checks glyph presence in the font program
+    (needed before writing with the font; not needed for width calculations)."""
     subtype = pdfobj.read_name(doc, xref, "Subtype")
     base = pdfobj.read_name(doc, xref, "BaseFont") or f"Font{xref}"
     if subtype == "Type0":
-        return _analyze_type0(doc, xref, base)
+        return _analyze_type0(doc, xref, base, verify)
     if subtype in ("TrueType", "Type1", "MMType1", "Type3"):
-        return _analyze_simple(doc, xref, base, subtype)
+        return _analyze_simple(doc, xref, base, subtype, verify)
     return None
 
 
@@ -84,7 +86,7 @@ def _invert(mapping: dict[bytes, str]) -> dict[str, bytes]:
     return reverse
 
 
-def _analyze_type0(doc: fitz.Document, xref: int, base: str) -> EmbeddedFont | None:
+def _analyze_type0(doc: fitz.Document, xref: int, base: str, verify: bool = True) -> EmbeddedFont | None:
     encoding = pdfobj.read_name(doc, xref, "Encoding")
     if encoding not in ("Identity-H", "Identity-V"):
         return None
@@ -99,7 +101,7 @@ def _analyze_type0(doc: fitz.Document, xref: int, base: str) -> EmbeddedFont | N
         widths = _parse_cid_widths(doc, descendant)
         embedded = _has_font_file(doc, descendant)
     reverse = _invert({k: v for k, v in mapping.items() if len(k) == 2})
-    if embedded:
+    if embedded and verify:
         reverse = fontcheck.filter_type0(doc, xref, descendant, reverse)
     font = EmbeddedFont(
         xref=xref,
@@ -155,7 +157,7 @@ def _has_font_file(doc: fitz.Document, xref: int) -> bool:
     )
 
 
-def _analyze_simple(doc: fitz.Document, xref: int, base: str, subtype: str) -> EmbeddedFont:
+def _analyze_simple(doc: fitz.Document, xref: int, base: str, subtype: str, verify: bool = True) -> EmbeddedFont:
     first_char = pdfobj.read_number_array(doc, xref, "FirstChar")
     widths_list = pdfobj.read_number_array(doc, xref, "Widths")
     start = int(first_char[0]) if first_char else 0
@@ -170,7 +172,7 @@ def _analyze_simple(doc: fitz.Document, xref: int, base: str, subtype: str) -> E
             mapping = {code: ch for code, ch in mapping.items() if widths.get(code, 0) > 0 or ch == " "}
     reverse = _invert({k: v for k, v in mapping.items() if len(k) == 1})
     embedded = subtype == "Type3" or _has_font_file(doc, xref)
-    if embedded and subtype == "TrueType":
+    if embedded and verify and subtype == "TrueType":
         reverse = fontcheck.filter_simple_truetype(doc, xref, reverse)
     scale = 1.0
     if subtype == "Type3":
