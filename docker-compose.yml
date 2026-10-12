@@ -1,0 +1,19 @@
+services:
+  pdf-studio:
+    build: .
+    image: pdf-studio:latest
+    container_name: pdf-studio
+    # Bound to localhost so your documents are only reachable from this machine.
+    # Change to "8080:8080" to share it on your network.
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - pdf-studio-data:/data
+    environment:
+      PDF_STUDIO_MAX_UPLOAD_MB: "200"
+      PDF_STUDIO_MAX_HISTORY: "60"
+      PDF_STUDIO_DOC_TTL_HOURS: "72"
+    restart: unless-stopped
+
+volumes:
+  pdf-studio-data:
