@@ -7,8 +7,9 @@ import { InsertPagesDialog, MetadataDialog, ShortcutsDialog } from "./components
 import { SignatureDialog, StampDialog } from "./components/dialogs/SignatureDialog";
 import { HeaderFooterDialog, WatermarkDialog } from "./components/dialogs/StampDialogs";
 import { Rail } from "./components/layout/Rail";
-import { Ribbon } from "./components/layout/Ribbon";
-import { TopBar, type RibbonTab } from "./components/layout/TopBar";
+import { Ribbon, type RibbonTab } from "./components/layout/Ribbon";
+import { TopBar } from "./components/layout/TopBar";
+import { OcrDialog } from "./components/dialogs/OcrDialog";
 import { PropertiesPanel } from "./components/properties/PropertiesPanel";
 import { Sidebar } from "./components/sidebar/Sidebar";
 import { StartScreen } from "./components/StartScreen";
@@ -45,6 +46,8 @@ function Dialogs() {
       return <InsertPagesDialog />;
     case "shortcuts":
       return <ShortcutsDialog />;
+    case "ocr":
+      return <OcrDialog />;
     default:
       return null;
   }
@@ -53,16 +56,11 @@ function Dialogs() {
 export default function App() {
   const doc = useEditor((s) => s.doc);
   const setDoc = useEditor((s) => s.setDoc);
-  const theme = useEditor((s) => s.theme);
   const toast = useEditor((s) => s.toast);
   const loadFonts = useFonts((s) => s.load);
   const [tab, setTab] = useState<RibbonTab>("edit");
   const [booting, setBooting] = useState(() => docIdFromHash() !== null);
   useShortcuts();
-
-  useEffect(() => {
-    document.documentElement.dataset.theme = theme;
-  }, [theme]);
 
   useEffect(() => {
     loadFonts().catch((error: unknown) => toast(`Could not load fonts: ${errorMessage(error)}`, "error"));
@@ -124,8 +122,8 @@ export default function App() {
 
   return (
     <div className="app">
-      <TopBar tab={tab} onTab={setTab} onClose={close} />
-      <Ribbon tab={tab} />
+      <TopBar onClose={close} />
+      <Ribbon tab={tab} onTab={setTab} />
       <div className="main">
         <Rail />
         <Sidebar />

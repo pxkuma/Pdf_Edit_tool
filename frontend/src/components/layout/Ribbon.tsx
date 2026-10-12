@@ -30,6 +30,8 @@ import {
   Pencil,
   PenTool,
   Replace,
+  RectangleHorizontal,
+  ScanText,
   RotateCcw,
   RotateCw,
   Scissors,
@@ -53,7 +55,17 @@ import { api } from "../../api/client";
 import { flushEdit } from "../../lib/editSession";
 import { imageSize, pickFile } from "../../lib/files";
 import { errorMessage, useEditor, type Tool } from "../../store/editor";
-import type { RibbonTab } from "./TopBar";
+
+export type RibbonTab = "edit" | "annotate" | "sign" | "pages" | "protect" | "tools";
+
+const TABS: [RibbonTab, string][] = [
+  ["edit", "Edit"],
+  ["annotate", "Comment"],
+  ["sign", "Fill & Sign"],
+  ["pages", "Pages"],
+  ["protect", "Protect"],
+  ["tools", "Tools"],
+];
 
 interface ToolButtonProps {
   icon: ReactNode;
@@ -77,7 +89,22 @@ function Group({ children }: { children: ReactNode }) {
   return <div className="ribbon-group">{children}</div>;
 }
 
-export function Ribbon({ tab }: { tab: RibbonTab }) {
+export function Ribbon({ tab, onTab }: { tab: RibbonTab; onTab: (tab: RibbonTab) => void }) {
+  return (
+    <div className="ribbon-wrap">
+      <nav className="ribbon-tabs" aria-label="Toolbars">
+        {TABS.map(([key, label]) => (
+          <button key={key} className={tab === key ? "on" : ""} onClick={() => onTab(key)}>
+            {label}
+          </button>
+        ))}
+      </nav>
+      <Tools tab={tab} />
+    </div>
+  );
+}
+
+function Tools({ tab }: { tab: RibbonTab }) {
   const state = useEditor();
   const { doc, tool, setTool, run, openDialog, setSidebar, sidebar, toast, selectedPages, currentPage, setPlacement, setTextPreset } = state;
   if (!doc) return null;
@@ -137,8 +164,11 @@ export function Ribbon({ tab }: { tab: RibbonTab }) {
             <ToolButton icon={<ImagePlus size={18} />} label="Image" active={tool === "image"} onClick={placeImage} />
           </Group>
           <Group>
-            {t("whiteout", <Square size={18} fill="currentColor" fillOpacity={0.15} />, "Whiteout", "Cover an area with white")}
+            {t("whiteout", <RectangleHorizontal size={18} />, "Whiteout", "Cover an area with white")}
             {t("eraseText", <Eraser size={18} />, "Erase text", "Remove text, keep background")}
+          </Group>
+          <Group>
+            <ToolButton icon={<ScanText size={18} />} label="OCR" title="Recognise text in scanned pages" onClick={() => openDialog("ocr")} />
           </Group>
           <Group>
             {panel("search", <Replace size={18} />, "Find/Replace")}
@@ -241,7 +271,7 @@ export function Ribbon({ tab }: { tab: RibbonTab }) {
           <Group>
             {t("redact", <SquareDashedMousePointer size={18} />, "Redact area")}
             <ToolButton icon={<FileSearch size={18} />} label="Redact text" onClick={() => setSidebar("search")} />
-            {t("whiteout", <Square size={18} fill="currentColor" fillOpacity={0.15} />, "Whiteout")}
+            {t("whiteout", <RectangleHorizontal size={18} />, "Whiteout")}
           </Group>
           <Group>
             <ToolButton icon={<Lock size={18} />} label="Password" title="Encrypt with a password" onClick={() => openDialog("protect")} />
@@ -263,6 +293,9 @@ export function Ribbon({ tab }: { tab: RibbonTab }) {
           <Group>
             <ToolButton icon={<Droplets size={18} />} label="Watermark" onClick={() => openDialog("watermark")} />
             <ToolButton icon={<Hash size={18} />} label="Page numbers" title="Header, footer & page numbers" onClick={() => openDialog("headerFooter")} />
+          </Group>
+          <Group>
+            <ToolButton icon={<ScanText size={18} />} label="OCR" title="Recognise text in scanned pages" onClick={() => openDialog("ocr")} />
           </Group>
           <Group>
             <ToolButton icon={<Info size={18} />} label="Properties" onClick={() => openDialog("metadata")} />

@@ -65,7 +65,7 @@ export function SpanEditor({ docId, edit, zoom, block }: SpanEditorProps) {
     const latest = current && current.span.id === span.id ? current.draft : draft;
     const { text: value, offset: [dx, dy] } = state.current;
     setActiveEdit(null);
-    if (value === span.text && !dx && !dy && !draftChanged(span, latest)) return;
+    if (value === span.text && !dx && !dy && !draftChanged(span, latest) && latest.ocrMode !== "hidden") return;
     const report = await run(() =>
       api.editSpan(docId, {
         page,
@@ -78,6 +78,7 @@ export function SpanEditor({ docId, edit, zoom, block }: SpanEditorProps) {
         dy,
         fit_width: latest.fitWidth,
         reflow: latest.reflow,
+        ocr_mode: latest.ocrMode,
       }),
     );
     reportEdit(report);

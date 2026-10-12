@@ -54,6 +54,8 @@ export interface Span {
   renderMode: number;
   colorSpace: string;
   skew: number;
+  /** Invisible text added by OCR on a scanned page. */
+  ocr: boolean;
 }
 
 export interface TextLine {
@@ -121,6 +123,7 @@ export interface PageModel {
   annotations: Annotation[];
   images: PageImage[];
   fields: FormField[];
+  scan: { scanned: boolean; hasOcr: boolean };
 }
 
 export interface FontFaceInfo {
@@ -200,4 +203,23 @@ export interface AnnotStyle {
   dashed: boolean;
   contents: string;
   author: string;
+}
+
+export interface OcrCapabilities {
+  available: boolean;
+  languages: string[];
+  default: string | null;
+}
+
+export interface Job<T = unknown> {
+  id: string;
+  docId: string;
+  kind: string;
+  total: number;
+  done: number;
+  status: "running" | "done" | "error";
+  message: string;
+  error: string;
+  result: T | null;
+  document: DocInfo | null;
 }

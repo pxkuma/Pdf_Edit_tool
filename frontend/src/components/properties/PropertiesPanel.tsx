@@ -1,4 +1,4 @@
-import { MousePointer2, PanelRightClose } from "lucide-react";
+import { PanelRightClose } from "lucide-react";
 import { useEditor, type DrawStyle, type Tool } from "../../store/editor";
 import { ColorPicker } from "../common/ColorPicker";
 import { NumberField } from "../common/NumberField";
@@ -116,20 +116,25 @@ export function PropertiesPanel() {
           <>
             <ToolProps tool={tool} />
             {hint && tool !== "redact" && (
-              <div className="prop-empty">
-                <MousePointer2 size={26} />
-                {hint}
-              </div>
+              <div className="prop-empty">{hint}</div>
             )}
           </>
         )}
         {page && (
           <div className="prop-section">
             <h4>Page {currentPage + 1}</h4>
-            <div className="muted">
-              {Math.round(page.width)} × {Math.round(page.height)} pt ({(page.width / 72 * 25.4).toFixed(0)} × {(page.height / 72 * 25.4).toFixed(0)} mm)
-              {page.rotation ? ` · rotated ${page.rotation}°` : ""}
-            </div>
+            <dl className="facts">
+              <dt>Size</dt>
+              <dd>
+                {(page.width / 72 * 25.4).toFixed(0)} × {(page.height / 72 * 25.4).toFixed(0)} mm
+              </dd>
+              <dt>Points</dt>
+              <dd>
+                {Math.round(page.width)} × {Math.round(page.height)}
+              </dd>
+              <dt>Rotation</dt>
+              <dd>{page.rotation}°</dd>
+            </dl>
           </div>
         )}
       </div>

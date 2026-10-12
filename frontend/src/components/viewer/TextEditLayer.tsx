@@ -64,9 +64,9 @@ export function TextEditLayer({ docId, page, model, zoom }: TextEditLayerProps) 
             return (
               <div
                 key={span.id}
-                className="run"
+                className={span.ocr ? "run ocr" : "run"}
                 style={cssRect(span.bbox, zoom)}
-                title={`${span.font} · ${span.size}pt — click to edit, double-click for paragraph`}
+                title={span.ocr ? "Scanned text (OCR) — click to edit" : `${span.font} · ${span.size} pt — click to edit, double-click for paragraph`}
                 onPointerDown={(e) => e.stopPropagation()}
                 onClick={(e) => onRunClick(span, e.detail)}
               />

@@ -1,4 +1,3 @@
-import { CheckCircle2, CircleAlert } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api } from "../../api/client";
 import type { DocFont } from "../../api/types";
@@ -30,13 +29,9 @@ export function FontsPanel() {
           <div className="row between">
             <strong style={{ color: "var(--text)" }}>{font.name}</strong>
             {font.subset ? (
-              <span className="badge warn">
-                <CircleAlert size={11} /> subset
-              </span>
+              <span className="tag">subset</span>
             ) : (
-              <span className="badge ok">
-                <CheckCircle2 size={11} /> full
-              </span>
+              <span className="tag">full</span>
             )}
           </div>
           <span>

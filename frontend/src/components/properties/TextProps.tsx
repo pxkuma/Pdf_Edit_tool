@@ -55,6 +55,46 @@ export function AlignControl({ value, onChange }: { value: Align; onChange: (val
   );
 }
 
+function fmt(value: number, unit = ""): string {
+  return `${Math.round(value * 100) / 100}${unit}`;
+}
+
+/** What the content stream says about the text being edited (kept exactly unless changed). */
+function DetectedStyle() {
+  const edit = useEditor((s) => s.activeEdit);
+  if (!edit) return null;
+  const { span } = edit;
+  const rows: [string, string][] = [
+    ["Font", span.ocr ? "Recognised by OCR" : span.font],
+    ["Size", fmt(span.size, " pt")],
+    ["Color", `${span.colorSpace} ${span.color}`],
+    ["Rendering", span.render],
+  ];
+  if (Math.abs(span.hscale - 100) > 0.05 && !span.ocr) rows.push(["Width", fmt(span.hscale, "%")]);
+  if (span.charSpacing) rows.push(["Letter spacing", fmt(span.charSpacing, " pt")]);
+  if (span.wordSpacing) rows.push(["Word spacing", fmt(span.wordSpacing, " pt")]);
+  if (span.rise) rows.push(["Baseline shift", fmt(span.rise, " pt")]);
+  if (Math.abs(span.skew) > 0.01) rows.push(["Slant", fmt(span.skew * 100, "%")]);
+  if (span.opacity < 0.999) rows.push(["Opacity", fmt(span.opacity * 100, "%")]);
+  return (
+    <div>
+      <dl className="facts">
+        {rows.map(([label, value]) => (
+          <div key={label} style={{ display: "contents" }}>
+            <dt>{label}</dt>
+            <dd title={value}>{value}</dd>
+          </div>
+        ))}
+      </dl>
+      {span.exact && !span.ocr && (
+        <p className="muted" style={{ margin: "6px 0 0", fontSize: 11 }}>
+          Unchanged properties are written back exactly as in the original.
+        </p>
+      )}
+    </div>
+  );
+}
+
 /** Properties for the text currently being edited in place. */
 export function ActiveEditProps() {
   const edit = useEditor((s) => s.activeEdit);
@@ -67,21 +107,26 @@ export function ActiveEditProps() {
     <>
       <div className="prop-section">
         <h4>{edit.mode === "block" ? "Paragraph" : "Text"}</h4>
-        <div className="note">
-          <div>
-            Original font: <strong style={{ color: "var(--text)" }}>{span.font}</strong>
+        <DetectedStyle />
+        {span.ocr && edit.mode === "span" && (
+          <div className="field">
+            <span className="field-label">Scanned text</span>
+            <label className="check">
+              <input type="radio" name="ocrMode" checked={draft.ocrMode === "replace"} onChange={() => patchDraft({ ocrMode: "replace" })} />
+              Replace in the image
+            </label>
+            <label className="check">
+              <input type="radio" name="ocrMode" checked={draft.ocrMode === "hidden"} onChange={() => patchDraft({ ocrMode: "hidden" })} />
+              Correct the hidden OCR text only
+            </label>
           </div>
-          <div>
-            {span.size} pt · {span.bold ? "bold" : "regular"}
-            {span.italic ? " italic" : ""}
-          </div>
-        </div>
+        )}
         <label className="field">
           <span>Font</span>
           <FontPicker
-            value={draft.font}
+            value={span.ocr && draft.font === "original" ? "face:" : draft.font}
             onChange={(font) => patchDraft({ font })}
-            allowOriginal
+            allowOriginal={!span.ocr}
             originalLabel={span.font}
             bold={draft.bold}
             italic={draft.italic}
@@ -127,7 +172,7 @@ export function ActiveEditProps() {
               <span>Letter spacing</span>
               <NumberField
                 value={draft.charSpacing}
-                placeholder="auto"
+                placeholder={span.charSpacing !== null ? `${span.charSpacing} (original)` : "original"}
                 min={-5}
                 max={50}
                 step={0.1}

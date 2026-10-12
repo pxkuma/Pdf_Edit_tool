@@ -1,36 +1,9 @@
-import {
-  ChevronDown,
-  Download,
-  FileDown,
-  FileText,
-  Keyboard,
-  Loader2,
-  Minus,
-  Moon,
-  PenLine,
-  Plus,
-  Redo2,
-  Settings2,
-  Sun,
-  Undo2,
-  X,
-} from "lucide-react";
+import { ChevronDown, Download, FileDown, FileText, Keyboard, Loader2, Minus, Plus, Redo2, Settings2, Undo2, X } from "lucide-react";
 import { api } from "../../api/client";
 import { flushEdit } from "../../lib/editSession";
 import { saveBlob } from "../../lib/files";
 import { useEditor } from "../../store/editor";
 import { Dropdown, MenuItem } from "../common/Dropdown";
-
-export type RibbonTab = "edit" | "annotate" | "sign" | "pages" | "protect" | "tools";
-
-const TABS: [RibbonTab, string][] = [
-  ["edit", "Edit"],
-  ["annotate", "Annotate"],
-  ["sign", "Fill & Sign"],
-  ["pages", "Pages"],
-  ["protect", "Protect"],
-  ["tools", "Tools"],
-];
 
 const ZOOMS = [0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4];
 
@@ -58,14 +31,8 @@ export async function quickDownload(): Promise<void> {
   if (file) saveBlob(file.blob, file.filename);
 }
 
-interface TopBarProps {
-  tab: RibbonTab;
-  onTab: (tab: RibbonTab) => void;
-  onClose: () => void;
-}
-
-export function TopBar({ tab, onTab, onClose }: TopBarProps) {
-  const { doc, zoom, setZoom, busy, theme, setTheme, openDialog, track } = useEditor();
+export function TopBar({ onClose }: { onClose: () => void }) {
+  const { doc, zoom, setZoom, busy, openDialog, track } = useEditor();
   if (!doc) return null;
 
   const download = async (fn: () => Promise<{ blob: Blob; filename: string }>) => {
@@ -76,41 +43,30 @@ export function TopBar({ tab, onTab, onClose }: TopBarProps) {
 
   return (
     <header className="topbar">
-      <div className="brand">
-        <span className="brand-mark">
-          <PenLine size={16} />
-        </span>
-        <span>PDF Studio</span>
-      </div>
+      <span className="brand">PDF Studio</span>
       <div className="doc-title" title={doc.filename}>
         <strong>{doc.filename}</strong>
         <span>
           {doc.pages.length} page{doc.pages.length === 1 ? "" : "s"}
-          {doc.history.length > 1 ? ` · ${doc.cursor} change${doc.cursor === 1 ? "" : "s"}` : ""}
+          {doc.cursor > 0 ? ` · ${doc.cursor} change${doc.cursor === 1 ? "" : "s"}` : ""}
         </span>
       </div>
-      <nav className="ribbon-tabs" aria-label="Toolbars">
-        {TABS.map(([key, label]) => (
-          <button key={key} className={tab === key ? "on" : ""} onClick={() => onTab(key)}>
-            {label}
-          </button>
-        ))}
-      </nav>
       <div className="topbar-actions">
         {busy > 0 && (
-          <span className="busy-dot" aria-live="polite">
-            <Loader2 size={15} className="spin" /> Saving…
+          <span className="status" aria-live="polite">
+            <Loader2 size={14} className="spin" /> Saving
           </span>
         )}
         <button className="icon-btn" onClick={() => void undo()} disabled={!doc.canUndo} title="Undo (Ctrl+Z)">
-          <Undo2 size={17} />
+          <Undo2 size={16} />
         </button>
         <button className="icon-btn" onClick={() => void redo()} disabled={!doc.canRedo} title="Redo (Ctrl+Y)">
-          <Redo2 size={17} />
+          <Redo2 size={16} />
         </button>
+        <span className="topbar-sep" />
         <div className="zoom-box">
-          <button className="icon-btn small" onClick={() => setZoom(zoom / 1.2)} title="Zoom out (Ctrl -)">
-            <Minus size={14} />
+          <button className="icon-btn" onClick={() => setZoom(zoom / 1.2)} title="Zoom out (Ctrl -)">
+            <Minus size={15} />
           </button>
           <Dropdown
             align="right"
@@ -122,7 +78,7 @@ export function TopBar({ tab, onTab, onClose }: TopBarProps) {
           >
             {(close) => (
               <>
-                <MenuItem label="Fit width" onClick={() => (setZoom(zoom, "width"), close())} />
+                <MenuItem label="Fit width" hint="Ctrl+0" onClick={() => (setZoom(zoom, "width"), close())} />
                 <MenuItem label="Fit page" onClick={() => (setZoom(zoom, "page"), close())} />
                 <div className="menu-sep" />
                 {ZOOMS.map((z) => (
@@ -131,30 +87,28 @@ export function TopBar({ tab, onTab, onClose }: TopBarProps) {
               </>
             )}
           </Dropdown>
-          <button className="icon-btn small" onClick={() => setZoom(zoom * 1.2)} title="Zoom in (Ctrl +)">
-            <Plus size={14} />
+          <button className="icon-btn" onClick={() => setZoom(zoom * 1.2)} title="Zoom in (Ctrl +)">
+            <Plus size={15} />
           </button>
         </div>
-        <button className="icon-btn" onClick={() => setTheme(theme === "dark" ? "light" : "dark")} title="Toggle dark mode">
-          {theme === "dark" ? <Sun size={17} /> : <Moon size={17} />}
-        </button>
+        <span className="topbar-sep" />
         <button className="icon-btn" onClick={() => openDialog("shortcuts")} title="Keyboard shortcuts (?)">
-          <Keyboard size={17} />
+          <Keyboard size={16} />
         </button>
         <Dropdown
           align="right"
           trigger={({ toggle }) => (
             <div className="row" style={{ gap: 0 }}>
               <button className="btn primary" style={{ borderTopRightRadius: 0, borderBottomRightRadius: 0 }} onClick={() => void quickDownload()} title="Download (Ctrl+S)">
-                <Download size={15} /> Download
+                <Download size={14} /> Download
               </button>
               <button
                 className="btn primary"
-                style={{ borderTopLeftRadius: 0, borderBottomLeftRadius: 0, padding: "0 6px", borderLeft: "1px solid rgb(255 255 255 / 0.25)" }}
+                style={{ borderTopLeftRadius: 0, borderBottomLeftRadius: 0, padding: "0 6px", borderLeftColor: "rgb(255 255 255 / 0.35)" }}
                 onClick={toggle}
                 aria-label="More download options"
               >
-                <ChevronDown size={15} />
+                <ChevronDown size={14} />
               </button>
             </div>
           )}
@@ -166,7 +120,7 @@ export function TopBar({ tab, onTab, onClose }: TopBarProps) {
               <MenuItem icon={<FileText size={15} />} label="Export as text" onClick={() => (close(), void download(() => api.exportText(doc.id)))} />
               <MenuItem icon={<FileDown size={15} />} label="Download original file" onClick={() => (close(), void download(() => api.exportOriginal(doc.id)))} />
               <div className="menu-sep" />
-              <MenuItem icon={<X size={15} />} label="Close document" danger onClick={() => (close(), onClose())} />
+              <MenuItem icon={<X size={15} />} label="Close document" onClick={() => (close(), onClose())} />
             </>
           )}
         </Dropdown>

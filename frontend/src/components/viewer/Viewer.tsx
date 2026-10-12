@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { ScanText } from "lucide-react";
+import { usePageModel } from "../../lib/pageModel";
 import { useEditor } from "../../store/editor";
 import { PageView } from "./PageView";
 
@@ -128,6 +130,11 @@ export function Viewer() {
     pan.current = null;
   };
 
+  const openDialog = useEditor((s) => s.openDialog);
+  const current = pages[Math.min(currentPage, pages.length - 1)];
+  const currentModel = usePageModel(doc?.id ?? "", current?.index ?? 0, current?.token ?? "", Boolean(doc && current));
+  const needsOcr = Boolean(currentModel?.scan?.scanned && !currentModel.scan.hasOcr);
+
   if (!doc) return null;
   const margin = viewport.height * 1.5;
   return (
@@ -140,6 +147,15 @@ export function Viewer() {
       onPointerUp={onPointerUp}
       tabIndex={-1}
     >
+      {needsOcr && (
+        <div className="viewer-notice">
+          <ScanText size={15} />
+          <span>Page {currentPage + 1} is a scanned image. Run OCR to make its text searchable, selectable and editable.</span>
+          <button className="btn small" onClick={() => openDialog("ocr")}>
+            Run OCR…
+          </button>
+        </div>
+      )}
       <div className="pages" style={{ gap: GAP, paddingTop: PAD_TOP }}>
         {pages.map((page, index) => {
           const top = offsets[index];

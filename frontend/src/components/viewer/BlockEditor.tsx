@@ -74,7 +74,7 @@ export function BlockEditor({ docId, edit, zoom }: BlockEditorProps) {
   return (
     <>
       <div className="edit-chip" style={{ left, top }} onPointerDown={(e) => e.stopPropagation()}>
-        <span className="badge" style={{ marginRight: 4 }}>Paragraph</span>
+        <span className="chip-label">Paragraph</span>
         <button className="btn small primary" onClick={() => void commit()} title="Apply (Ctrl+Enter)">
           <Check size={14} /> Apply
         </button>

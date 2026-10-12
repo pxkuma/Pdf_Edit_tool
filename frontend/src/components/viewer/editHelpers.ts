@@ -16,7 +16,8 @@ export function draftFromSpan(span: Span): SpanDraft {
     charSpacing: null, // null = keep the original spacing exactly
     hscale: span.hscale || 100,
     fitWidth: false,
-    reflow: true,
+    reflow: !span.ocr,
+    ocrMode: "replace",
   };
 }
 

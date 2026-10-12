@@ -45,6 +45,7 @@ export type DialogName =
   | "shortcuts"
   | "protect"
   | "redactSearch"
+  | "ocr"
   | null;
 
 export interface NewTextStyle {
@@ -81,6 +82,7 @@ export interface SpanDraft {
   hscale: number;
   fitWidth: boolean;
   reflow: boolean;
+  ocrMode: "replace" | "hidden";
 }
 
 export interface ActiveEdit {
@@ -119,7 +121,6 @@ interface EditorState {
   sidebar: SidebarPanel;
   propertiesOpen: boolean;
   dialog: DialogName;
-  theme: "light" | "dark";
   newText: NewTextStyle;
   markup: { color: string; opacity: number };
   ink: DrawStyle;
@@ -144,7 +145,6 @@ interface EditorActions {
   setSidebar: (panel: SidebarPanel) => void;
   toggleProperties: () => void;
   openDialog: (dialog: DialogName) => void;
-  setTheme: (theme: "light" | "dark") => void;
   patchNewText: (patch: Partial<NewTextStyle>) => void;
   patchMarkup: (patch: Partial<{ color: string; opacity: number }>) => void;
   patchInk: (patch: Partial<DrawStyle>) => void;
@@ -163,7 +163,6 @@ interface EditorActions {
   track: <T>(fn: () => Promise<T>) => Promise<T | undefined>;
 }
 
-const THEME_KEY = "pdfstudio.theme";
 const STYLE_KEY = "pdfstudio.styles";
 
 function readStorage<T>(key: string, fallback: T): T {
@@ -181,16 +180,6 @@ function writeStorage(key: string, value: unknown): void {
   } catch {
     /* storage unavailable: preferences simply aren't remembered */
   }
-}
-
-function initialTheme(): "light" | "dark" {
-  try {
-    const stored = localStorage.getItem(THEME_KEY);
-    if (stored === "light" || stored === "dark") return stored;
-  } catch {
-    /* ignore */
-  }
-  return window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light";
 }
 
 const defaultStyles = {
@@ -239,7 +228,6 @@ export const useEditor = create<EditorState & EditorActions>((set, get) => {
     sidebar: "thumbnails",
     propertiesOpen: true,
     dialog: null,
-    theme: initialTheme(),
     newText: savedStyles.newText,
     markup: savedStyles.markup,
     ink: savedStyles.ink,
@@ -280,14 +268,6 @@ export const useEditor = create<EditorState & EditorActions>((set, get) => {
     setSidebar: (panel) => set((state) => ({ sidebar: state.sidebar === panel ? null : panel })),
     toggleProperties: () => set((state) => ({ propertiesOpen: !state.propertiesOpen })),
     openDialog: (dialog) => set({ dialog }),
-    setTheme: (theme) => {
-      try {
-        localStorage.setItem(THEME_KEY, theme);
-      } catch {
-        /* ignore */
-      }
-      set({ theme });
-    },
     patchNewText: (patch) => {
       set((state) => ({ newText: { ...state.newText, ...patch } }));
       persistStyles();

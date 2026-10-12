@@ -5,7 +5,9 @@ import type {
   EditReport,
   FontFamily,
   FormField,
+  Job,
   Metadata,
+  OcrCapabilities,
   MutationResponse,
   PageModel,
   Point,
@@ -119,6 +121,7 @@ export const api = {
       dy?: number;
       fit_width?: boolean;
       reflow?: boolean;
+      ocr_mode?: "replace" | "hidden";
     },
   ): Mut<EditReport> => request("POST", `${doc(id)}/text/span`, body),
   editBlock: (
@@ -211,6 +214,11 @@ export const api = {
   deleteField: (id: string, page: number, xref: number): Mut => request("DELETE", `${doc(id)}/forms/${page}/${xref}`),
   flatten: (id: string, annotations: boolean, forms: boolean): Mut =>
     request("POST", `${doc(id)}/flatten`, { annotations, forms }),
+
+  ocrInfo: () => request<OcrCapabilities>("GET", "/api/ocr"),
+  startOcr: (id: string, body: { pages: string | null; language: string; dpi: number; force: boolean }) =>
+    request<Job>("POST", `${doc(id)}/ocr`, body),
+  job: <T,>(jobId: string) => request<Job<T>>("GET", `/api/jobs/${jobId}`),
 
   exportPdf: (id: string, options: Record<string, unknown>) => download("POST", `${doc(id)}/export`, options),
   exportImages: (id: string, options: Record<string, unknown>) => download("POST", `${doc(id)}/export/images`, options),
