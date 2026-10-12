@@ -13,15 +13,19 @@ FROM python:3.12.8-slim-bookworm AS runtime
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
+    OMP_THREAD_LIMIT=1 \
     PDF_STUDIO_DATA=/data \
     PDF_STUDIO_STATIC=/app/static
 
-# Metric-compatible substitutes for common fonts (Arial/Times/Courier -> Liberation,
-# Calibri -> Carlito, Cambria -> Caladea) plus wide Unicode coverage (Noto, DejaVu).
+# Fonts: metric-compatible substitutes for common fonts (Arial/Times/Courier ->
+# Liberation, Calibri -> Carlito, Cambria -> Caladea) plus wide Unicode coverage.
+# OCR: Tesseract with a set of common languages (add more tesseract-ocr-<lang> here).
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       fonts-liberation2 fonts-crosextra-carlito fonts-crosextra-caladea \
       fonts-dejavu-core fonts-noto-core fonts-open-sans fonts-lato fonts-roboto-unhinted \
+      tesseract-ocr tesseract-ocr-eng tesseract-ocr-hin tesseract-ocr-deu tesseract-ocr-fra \
+      tesseract-ocr-spa tesseract-ocr-ita tesseract-ocr-por \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

@@ -100,7 +100,7 @@ def _same_state(before, after):
 def test_edit_preserves_exact_state(client, styled, needle, new_text):
     _pdf, _page, before, _span = _record_for(client, styled["id"], needle)
     assert before is not None
-    _edit(client, styled["id"], needle, new_text)
+    _edit(client, styled["id"], needle, new_text, ocr_mode="hidden")
     _pdf2, page2, after, _span2 = _record_for(client, styled["id"], new_text)
     assert after is not None
     _same_state(before, after)

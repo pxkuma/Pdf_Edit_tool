@@ -10,7 +10,7 @@ original font for every letter that exists in the embedded subset.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import pymupdf as fitz
 
@@ -69,6 +69,8 @@ class PlacedLine:
     direction: tuple[float, float]
     glyphs: list[Glyph]
     space_extra: float = 0.0  # extra points added after each space (justify)
+    hscale: float | None = None  # per-line override of TextStyle.hscale (OCR word fitting)
+    size: float | None = None  # per-line override of TextStyle.size
 
 
 @dataclass
@@ -297,21 +299,24 @@ def build_content(
     for line in lines:
         if not line.glyphs:
             continue
-        matrix = _text_matrix(page, line, style)
+        line_style = style
+        if line.hscale is not None or line.size is not None:
+            line_style = replace(style, hscale=line.hscale or style.hscale, size=line.size or style.size)
+        matrix = _text_matrix(page, line, line_style)
         out.append("BT")
         out.append(f"{_render_mode(style)} Tr")
-        out.append(f"{_fmt(style.char_spacing)} Tc {_fmt(style.word_spacing)} Tw {_fmt(style.hscale)} Tz")
+        out.append(f"{_fmt(style.char_spacing)} Tc {_fmt(style.word_spacing)} Tw {_fmt(line_style.hscale)} Tz")
         if style.rise:
             out.append(f"{_fmt(style.rise)} Ts")
         out.append(" ".join(_fmt(v) for v in matrix) + " Tm")
         fallback_name = next(iter(font_names.values()), None)
-        for key, body in _tj_array(line.glyphs, style, line.space_extra):
+        for key, body in _tj_array(line.glyphs, line_style, line.space_extra):
             name = font_names.get(key) or fallback_name
             if name is None:
                 continue
-            out.append(f"/{name} {_fmt(style.size)} Tf [{body}] TJ")
+            out.append(f"/{name} {_fmt(line_style.size)} Tf [{body}] TJ")
         out.append("ET")
-        out.extend(_decorations(page, line, style, to_stroke_ops(fill)))
+        out.extend(_decorations(page, line, line_style, to_stroke_ops(fill)))
     out.append("Q")
     return "\n".join(out).encode("latin-1")
 

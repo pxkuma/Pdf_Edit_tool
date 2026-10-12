@@ -35,6 +35,7 @@ class SpanEditBody(BaseModel):
     dy: float = 0
     fit_width: bool = False
     reflow: bool = True
+    ocr_mode: Literal["replace", "hidden"] = "replace"
 
 
 class BlockEditBody(BaseModel):
@@ -241,3 +242,10 @@ class SplitBody(BaseModel):
 
 class ImageMoveBody(BaseModel):
     rect: Rect
+
+
+class OcrBody(BaseModel):
+    pages: str | None = Field(None, max_length=500)
+    language: str = Field("eng", pattern=r"^[A-Za-z_]+(\+[A-Za-z_]+)*$", max_length=100)
+    dpi: int = Field(300, ge=100, le=600)
+    force: bool = False

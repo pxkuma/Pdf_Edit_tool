@@ -44,7 +44,7 @@ def _preview(text: str) -> str:
 @router.post("/text/span")
 def edit_span(doc_id: str, body: schemas.SpanEditBody) -> dict:
     edit = SpanEdit(body.bbox, body.origin, body.original_text, body.text, _style(body.style),
-                    body.dx, body.dy, body.fit_width, body.reflow)
+                    body.dx, body.dy, body.fit_width, body.reflow, body.ocr_mode)
     operation = single_page(body.page, lambda doc, page: asdict(textedit.edit_span(doc, page, deps.catalog(), edit)))
     return mutate(doc_id, f"Edited text “{_preview(body.text)}”", operation)
 

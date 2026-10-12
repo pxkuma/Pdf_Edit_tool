@@ -84,6 +84,8 @@ def _joinable(run: dict, span: dict, tagged: set[str], direction: tuple[float, f
     gap = _advance_gap(fitz.Rect(run["bbox"]), fitz.Rect(span["bbox"]), direction)
     if gap > 0.3 * size or gap < -0.5 * size:
         return False
+    if span.get("alpha", 255) == 0 or run.get("alpha", 255) == 0:
+        return False  # invisible (OCR) words stay individually editable
     name = normalize_font_name(span["font"])
     return (
         span["text"].isspace()
@@ -137,7 +139,7 @@ def exact_style(doc: fitz.Document, page: fitz.Page, run: dict) -> dict:
     record = run.get("record")
     if record is None:
         return {"hscale": 100.0, "charSpacing": None, "wordSpacing": 0.0, "rise": 0.0, "render": "fill",
-                "renderMode": 0, "colorSpace": "RGB", "skew": 0.0, "exact": False}
+                "renderMode": 0, "colorSpace": "RGB", "skew": 0.0, "ocr": False, "exact": False}
     return {
         "size": round(record.effective_size, 2),
         "hscale": round(record.effective_hscale, 2),
@@ -149,6 +151,7 @@ def exact_style(doc: fitz.Document, page: fitz.Page, run: dict) -> dict:
         "colorSpace": textstate.describe_paint(doc, page, record.stroke if record.render_mode in (1, 5) else record.fill),
         "skew": round(record.skew, 3),
         "opacity": round(textstate.fill_opacity(doc, page, record), 3),
+        "ocr": record.render_mode in (3, 7),
         "exact": True,
     }
 

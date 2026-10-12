@@ -10,7 +10,7 @@ from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, Response
 
 from .. import deps
-from ..pdf import annots, extract, forms, images, pages
+from ..pdf import annots, extract, forms, images, ocr, pages
 from ..storage import PDF_LOCK
 from . import schemas
 from .common import check_page, mutate, ok, read_upload, single_page
@@ -67,6 +67,7 @@ def model(doc_id: str, index: int) -> dict:
                 "annotations": annots.list_annotations(page),
                 "images": images.list_images(doc, page),
                 "fields": forms.list_fields_on_page(page),
+                "scan": ocr.page_scan_info(page),
             }
             _MODEL_CACHE[key] = cached
             while len(_MODEL_CACHE) > _MODEL_CACHE_SIZE:

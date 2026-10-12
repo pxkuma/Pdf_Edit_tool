@@ -7,7 +7,7 @@ from dataclasses import dataclass, field, replace
 
 import pymupdf as fitz
 
-from . import extract, fontres, pdfobj, textstate
+from . import extract, fontres, ocr, pdfobj, textstate
 from .fonts import FontCatalog, FontFace, style_from_name
 from .geometry import from_display_point, from_display_vector, hex_to_rgb, shrink_for_redaction
 from .textwriter import FontChain, Glyph, PlacedLine, TextStyle, line_width, write_lines
@@ -42,6 +42,7 @@ class SpanEdit:
     dy: float = 0.0
     fit_width: bool = False
     reflow: bool = True
+    ocr_mode: str = "replace"  # OCR'd (invisible) text: "replace" in the image, or "hidden" layer only
 
 
 @dataclass(frozen=True)
@@ -392,6 +393,9 @@ def edit_span(doc: fitz.Document, page: fitz.Page, catalog: FontCatalog, edit: S
     line, runs, index = found
     span = runs[index]
     direction = tuple(line.get("dir", (1.0, 0.0)))
+    record = span.get("record")
+    if record is not None and record.render_mode in (3, 7) and edit.ocr_mode == "replace":
+        return _replace_scanned(doc, page, catalog, edit, span, direction)
     main = _span_job(doc, page, catalog, span, edit.text, edit.style, edit.fit_width)
     moved = bool(edit.dx or edit.dy)
     if moved:
@@ -409,6 +413,54 @@ def edit_span(doc: fitz.Document, page: fitz.Page, catalog: FontCatalog, edit: S
         _rebind(job, doc, page)
         write_lines(doc, page, [PlacedLine(job.origin, direction, job.glyphs)], job.style, job.chain)
     return _report(main.chain)
+
+
+def _replace_scanned(doc: fitz.Document, page: fitz.Page, catalog: FontCatalog, edit: SpanEdit,
+                     span: dict, direction: tuple[float, float]) -> EditReport:
+    """Edit a word recognised by OCR: paint over it in the scan and draw real text.
+
+    The background and ink colours are sampled from the image so the replacement
+    blends in; the size and width follow the recognised word.
+    """
+    record = span["record"]
+    rect = fitz.Rect(span["bbox"])
+    sample = ocr.sample_colors(page, rect)
+    background, ink = sample.background, sample.ink
+    request = edit.style
+    if request.bold is None:
+        request = replace(request, bold=sample.looks_bold)
+    font = request.font if request.font != "original" else ""
+    if not font:
+        face = catalog.substitute("Helvetica", bool(request.bold), bool(request.italic), False, False)
+        font = f"face:{face.id}" if face else ""
+    plan = plan_fonts(doc, page, catalog, replace(request, font=font), None)
+    size = request.size or record.effective_size
+    _check_size(size)
+    style = TextStyle(
+        size=size,
+        color=hex_to_rgb(request.color, ink),
+        opacity=1.0 if request.opacity is None else request.opacity,
+        underline=request.underline,
+        strike=request.strike,
+        char_spacing=request.char_spacing or 0.0,
+        # The invisible OCR layer is squeezed to Tesseract's tight ink boxes, so its
+        # width scale is not a property of the scanned font: use natural width.
+        hscale=max(10.0, min(400.0, request.hscale or 100.0)),
+    )
+    glyphs = plan.chain.encode(edit.text)
+    if edit.fit_width and glyphs:
+        natural = line_width(glyphs, style)
+        if natural > 0:
+            style = replace(style, hscale=max(30.0, min(300.0, style.hscale * rect.width / natural)))
+    cover = rect + (-0.6, -0.6, 0.6, 0.6)
+    redact_areas(page, [cover], fill=background, images=fitz.PDF_REDACT_IMAGE_PIXELS)
+    origin = (span["origin"][0], span["origin"][1])
+    if edit.dx or edit.dy:
+        move = _display_delta(page, edit.dx, edit.dy)
+        origin = (origin[0] + move[0], origin[1] + move[1])
+    if edit.text.strip():
+        write_lines(doc, page, [PlacedLine(origin, direction, glyphs)], style, plan.chain)
+    return _report(plan.chain)
 
 
 def _display_delta(page: fitz.Page, dx: float, dy: float) -> tuple[float, float]:
