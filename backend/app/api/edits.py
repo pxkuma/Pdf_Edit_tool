@@ -10,6 +10,7 @@ from .. import deps
 from ..pdf import annots, doctools, forms, images, textedit
 from ..pdf.annots import AnnotStyle
 from ..pdf.doctools import StampStyle
+from ..pdf.push import PushItem, PushRequest
 from ..pdf.textedit import BlockEdit, NewText, SpanEdit, StyleRequest
 from ..storage import PDF_LOCK, Mutation
 from . import schemas
@@ -51,8 +52,12 @@ def edit_span(doc_id: str, body: schemas.SpanEditBody) -> dict:
 
 @router.post("/text/block")
 def edit_block(doc_id: str, body: schemas.BlockEditBody) -> dict:
+    pushed = None
+    if body.push is not None:
+        items = tuple(PushItem(i.kind, i.bbox, i.xref) for i in body.push.items)
+        pushed = PushRequest(body.push.dy, items)
     edit = BlockEdit(body.bbox, body.text, _style(body.style), body.align, body.line_height,
-                     body.width, body.max_width, body.dx, body.dy)
+                     body.width, body.max_width, body.dx, body.dy, pushed)
     operation = single_page(body.page, lambda doc, page: asdict(textedit.edit_block(doc, page, deps.catalog(), edit)))
     return mutate(doc_id, "Edited paragraph", operation)
 

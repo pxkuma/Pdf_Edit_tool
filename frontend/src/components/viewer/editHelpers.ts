@@ -2,7 +2,7 @@ import type { EditReport, Span, TextBlock, TextStyle } from "../../api/types";
 import { checkSpanFont } from "../../lib/fontPrompt";
 import { ensureFace, findFace, useFonts, variantOf } from "../../lib/fonts";
 import type { ActiveEdit, SpanDraft } from "../../store/editor";
-import { AUTO_BOX, useEditor } from "../../store/editor";
+import { AUTO_BOX, DEFAULT_PUSH, useEditor } from "../../store/editor";
 
 export function draftFromSpan(span: Span): SpanDraft {
   return {
@@ -101,6 +101,8 @@ export function beginBlockEdit(page: number, block: TextBlock, text?: string): A
     lineStep: lineStep(block, main.size),
     lineHeight: null,
     box: AUTO_BOX,
+    lineCount: block.lines.filter((l) => l.spans.some((s) => s.text.trim())).length || 1,
+    push: DEFAULT_PUSH,
     draft: draftFromSpan(main),
     align: "left",
   };
@@ -109,6 +111,11 @@ export function beginBlockEdit(page: number, block: TextBlock, text?: string): A
 export function reportEdit(report: EditReport | undefined): void {
   if (!report) return;
   const { toast } = useEditor.getState();
+  if (report.push_skipped?.length) {
+    const counts = report.push_skipped.reduce<Record<string, number>>((acc, k) => ({ ...acc, [k]: (acc[k] ?? 0) + 1 }), {});
+    const list = Object.entries(counts).map(([kind, n]) => `${n} ${kind}${n > 1 ? "s" : ""}`).join(", ");
+    toast(`Could not move ${list}; ${report.push_skipped.length > 1 ? "they stay" : "it stays"} in place.`, "warning");
+  }
   if (report.missing_chars.length) {
     toast(`No installed font contains: ${report.missing_chars.join(" ")} — those characters were skipped.`, "warning");
   } else if (!report.exact_font && report.fonts_used.length > 1) {

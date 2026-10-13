@@ -94,6 +94,25 @@ export interface BoxDraft {
 
 export const AUTO_BOX: BoxDraft = { dx: 0, dy: 0, width: null };
 
+/** How content below a growing text box moves (see lib/push.ts). */
+export interface PushDraft {
+  enabled: boolean;
+  scope: "column" | "page";
+  follow: boolean; // also pull content up when the box gets shorter
+  extra: number; // extra spacing (pt) on top of the growth
+  overrides: Record<string, boolean>; // per item: true = move, false = keep
+}
+
+export const DEFAULT_PUSH: PushDraft = { enabled: true, scope: "column", follow: false, extra: 0, overrides: {} };
+
+/** What the live preview currently moves (shown in Properties). */
+export interface PushInfo {
+  count: number;
+  dy: number;
+  offPage: number;
+  conflicts: number; // kept items that moved content would overlap
+}
+
 export interface ActiveEdit {
   mode: "span" | "block";
   page: number;
@@ -105,6 +124,9 @@ export interface ActiveEdit {
   lineStep?: number; // original baseline distance (pt) at the span's size
   lineHeight?: number | null; // multiple of the font size; null = original spacing
   box?: BoxDraft;
+  lineCount?: number; // lines the box had originally
+  push?: PushDraft;
+  pushInfo?: PushInfo;
   draft: SpanDraft;
   align: "left" | "center" | "right" | "justify";
 }

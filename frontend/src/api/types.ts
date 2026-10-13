@@ -124,6 +124,7 @@ export interface PageModel {
   text: { blocks: TextBlock[]; words: Word[] };
   annotations: Annotation[];
   images: PageImage[];
+  drawings?: Rect[]; // clusters of vector graphics (rules, boxes, table grids)
   fields: FormField[];
   scan: { scanned: boolean; hasOcr: boolean };
 }
@@ -166,6 +167,8 @@ export interface EditReport {
   fonts_used: string[];
   missing_chars: string[];
   exact_font: boolean;
+  pushed?: number;
+  push_skipped?: string[];
 }
 
 export interface MutationResponse<T = unknown> {

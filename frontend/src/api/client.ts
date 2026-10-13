@@ -141,6 +141,7 @@ export const api = {
       max_width?: number | null;
       dx?: number;
       dy?: number;
+      push?: { dy: number; items: { kind: string; bbox: Rect; xref?: number }[] } | null;
     },
   ): Mut<EditReport> => request("POST", `${doc(id)}/text/block`, body),
   addText: (

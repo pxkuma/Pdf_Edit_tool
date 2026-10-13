@@ -38,6 +38,17 @@ class SpanEditBody(BaseModel):
     ocr_mode: Literal["replace", "hidden"] = "replace"
 
 
+class PushItemBody(BaseModel):
+    kind: Literal["text", "drawing", "image", "field", "annot"]
+    bbox: Rect
+    xref: int = Field(0, ge=0)
+
+
+class PushBody(BaseModel):
+    dy: float = Field(ge=-2000, le=2000)
+    items: list[PushItemBody] = Field(default_factory=list, max_length=5000)
+
+
 class BlockEditBody(BaseModel):
     page: int = Field(ge=0)
     bbox: Rect
@@ -51,6 +62,7 @@ class BlockEditBody(BaseModel):
     max_width: float | None = Field(None, gt=0, le=20000)
     dx: float = Field(0, ge=-20000, le=20000)
     dy: float = Field(0, ge=-20000, le=20000)
+    push: PushBody | None = None  # content below that moves with the box
 
 
 class AddTextBody(BaseModel):

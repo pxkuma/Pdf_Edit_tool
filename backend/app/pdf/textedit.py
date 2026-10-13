@@ -7,9 +7,14 @@ from dataclasses import dataclass, field, replace
 
 import pymupdf as fitz
 
-from . import extract, fontres, ocr, pdfobj, textstate
+from . import extract, fontres, ocr, pdfobj, push, textstate
 from .fonts import FontCatalog, FontFace, style_from_name
-from .geometry import from_display_point, from_display_vector, hex_to_rgb, shrink_for_redaction
+from .geometry import (
+    from_display_point,
+    from_display_vector,
+    hex_to_rgb,
+    shrink_for_redaction,
+)
 from .textwriter import FontChain, Glyph, PlacedLine, TextStyle, line_width, write_lines
 
 
@@ -56,6 +61,7 @@ class BlockEdit:
     max_width: float | None = None  # wrap limit for auto-width boxes (None: ``width``)
     dx: float = 0.0  # move, display space
     dy: float = 0.0
+    push: push.PushRequest | None = None  # content below that moves with the box
 
 
 # Browser and PDF font metrics differ by a fraction of a percent: never push the
@@ -81,6 +87,8 @@ class EditReport:
     fonts_used: list[str]
     missing_chars: list[str]
     exact_font: bool
+    pushed: int = 0  # objects moved below a text box
+    push_skipped: list[str] = field(default_factory=list)
 
 
 # --------------------------------------------------------------- font logic
@@ -249,7 +257,7 @@ def bind_resources(request: StyleRequest, record: textstate.TextRecord, doc: fit
             "gstates": textstate.resolve_gstates(doc, page, record.gstates)}
 
 
-def _rebind(job: "_WriteJob", doc: fitz.Document, page: fitz.Page) -> None:
+def _rebind(job: _WriteJob, doc: fitz.Document, page: fitz.Page) -> None:
     if job.record is not None:
         job.style = replace(job.style, **bind_resources(job.request, job.record, doc, page))
 
@@ -271,7 +279,8 @@ def _report(chain: FontChain) -> EditReport:
 # --------------------------------------------------------------- redaction
 def redact_areas(page: fitz.Page, rects: list[fitz.Rect], fill: tuple | bool = False,
                  images: int = fitz.PDF_REDACT_IMAGE_NONE,
-                 graphics: int = fitz.PDF_REDACT_LINE_ART_NONE) -> None:
+                 graphics: int = fitz.PDF_REDACT_LINE_ART_NONE,
+                 text: int = fitz.PDF_REDACT_TEXT_REMOVE) -> None:
     """Apply redactions for ``rects`` without applying pre-existing redact annots."""
     pending = []
     for annot in list(page.annots(types=[fitz.PDF_ANNOT_REDACT]) or []):
@@ -280,7 +289,7 @@ def redact_areas(page: fitz.Page, rects: list[fitz.Rect], fill: tuple | bool = F
     for rect in rects:
         if not rect.is_empty:
             page.add_redact_annot(rect, fill=fill)
-    page.apply_redactions(images=images, graphics=graphics, text=fitz.PDF_REDACT_TEXT_REMOVE)
+    page.apply_redactions(images=images, graphics=graphics, text=text)
     for rect, info in pending:
         restored = page.add_redact_annot(rect)
         restored.set_info(info)
@@ -325,6 +334,7 @@ class _WriteJob:
     chain: FontChain
     record: textstate.TextRecord | None = None
     request: StyleRequest = field(default_factory=StyleRequest)
+    direction: tuple[float, float] = (1.0, 0.0)
 
 
 def _span_job(
@@ -563,11 +573,63 @@ def edit_block(doc: fitz.Document, page: fitz.Page, catalog: FontCatalog, edit: 
     width = edit.width or (block_rect.width if abs(direction[0]) >= abs(direction[1]) else block_rect.height) + 0.5
     wrap_width = max(edit.max_width, width) if edit.max_width else width
     placed = _layout(plan.chain, edit.text, style, origin, direction, width, step, edit.align, wrap_width)
-    redact_areas(page, [shrink_for_redaction(fitz.Rect(line["bbox"]), direction) for line in lines])
+    push_plan, push_jobs = _plan_push(doc, page, catalog, edit.push, lines, tagged, records)
+    removal = [shrink_for_redaction(fitz.Rect(line["bbox"]), direction) for line in lines]
+    if push_plan is not None:
+        removal += [shrink_for_redaction(r, tuple(line.get("dir", (1.0, 0.0))))
+                    for r, line in zip(push.text_removal_rects(push_plan), push_plan.lines)]
+    redact_areas(page, removal)
+    if push_plan is not None:
+        push.remove_graphics(page, push_plan, redact_areas)
+        push.place_graphics(page, push_plan)
     if first_span.get("record") is not None:
         style = replace(style, **bind_resources(edit.style, first_span["record"], doc, page))
     write_lines(doc, page, placed, style, plan.chain)
-    return _report(plan.chain)
+    report = _report(plan.chain)
+    if push_plan is None:
+        return report
+    for job in push_jobs:
+        _rebind(job, doc, page)
+        write_lines(doc, page, [PlacedLine(job.origin, job.direction, job.glyphs)], job.style, job.chain)
+    push.place_copies(page, push_plan)
+    return replace(report, pushed=push_plan.moved, push_skipped=push_plan.skipped)
+
+
+def _plan_push(doc: fitz.Document, page: fitz.Page, catalog: FontCatalog, request: push.PushRequest | None,
+               box_lines: list[dict], tagged: set[str], records: list) -> tuple[push.PushPlan | None, list[_WriteJob]]:
+    """Content below the box to move, and the text jobs that rewrite its lines in their own fonts."""
+    if request is None or not request.items or abs(request.dy) < 0.01:
+        return None, []
+    lines = [line for block in extract.page_dict(page).get("blocks", []) if block.get("type", 0) == 0
+             for line in block["lines"]]
+    push_plan = push.plan(doc, page, request, lines, box_lines)
+    jobs: list[_WriteJob] = []
+    for line in push_plan.lines:
+        direction = tuple(line.get("dir", (1.0, 0.0)))
+        runs = extract.attach_records(doc, extract.line_runs(line, tagged), direction, records, tagged)
+        line_jobs = _exact_jobs(doc, page, catalog, runs)
+        if line_jobs is None:
+            push_plan.copies.append(fitz.Rect(line["bbox"]))  # not rewritable exactly: copy it
+            continue
+        for job in line_jobs:
+            job.origin = (job.origin[0] + push_plan.delta.x, job.origin[1] + push_plan.delta.y)
+            job.direction = direction
+        jobs.extend(line_jobs)
+    return push_plan, jobs
+
+
+def _exact_jobs(doc: fitz.Document, page: fitz.Page, catalog: FontCatalog, runs: list[dict]) -> list[_WriteJob] | None:
+    jobs = []
+    for span in runs:
+        if not span["text"]:
+            continue
+        job = _span_job(doc, page, catalog, span, span["text"], StyleRequest())
+        embedded = job.chain.embedded
+        primary = span.get("primary_text", span["text"])
+        if embedded is None or job.chain.missing or embedded.coverage(primary) < 1.0:
+            return None
+        jobs.append(job)
+    return jobs
 
 
 def _block_start(lines: list[dict], direction: tuple[float, float]) -> tuple[float, float]:

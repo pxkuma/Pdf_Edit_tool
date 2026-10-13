@@ -2,7 +2,7 @@ import { AlignCenter, AlignJustify, AlignLeft, AlignRight, Bold, Italic, Striket
 import { ColorPicker } from "../common/ColorPicker";
 import { FontPicker } from "../common/FontPicker";
 import { NumberField } from "../common/NumberField";
-import { useEditor } from "../../store/editor";
+import { DEFAULT_PUSH, useEditor, type PushDraft } from "../../store/editor";
 
 type Align = "left" | "center" | "right" | "justify";
 
@@ -157,6 +157,7 @@ export function ActiveEditProps() {
         </label>
       </div>
       {edit.mode === "block" ? (
+        <>
         <div className="prop-section">
           <h4>Layout</h4>
           <AlignControl value={edit.align} onChange={(align) => patchEdit({ align })} />
@@ -194,6 +195,8 @@ export function ActiveEditProps() {
             Corner handles resize the text. Ctrl+Enter applies, Esc cancels.
           </p>
         </div>
+        <PushProps />
+        </>
       ) : (
         <div className="prop-section">
           <h4>Spacing</h4>
@@ -230,6 +233,69 @@ export function ActiveEditProps() {
         </div>
       )}
     </>
+  );
+}
+
+/** How content below a growing text box moves. */
+function PushProps() {
+  const edit = useEditor((s) => s.activeEdit);
+  const patchEdit = useEditor((s) => s.patchEdit);
+  if (!edit || edit.mode !== "block") return null;
+  const push = edit.push ?? DEFAULT_PUSH;
+  const info = edit.pushInfo;
+  const set = (patch: Partial<PushDraft>) => patchEdit({ push: { ...push, ...patch } });
+  const pinned = Object.keys(push.overrides).length;
+
+  return (
+    <div className="prop-section">
+      <h4>Content below</h4>
+      <label className="check">
+        <input type="checkbox" checked={push.enabled} onChange={(e) => set({ enabled: e.target.checked })} />
+        Push content down when the box grows
+      </label>
+      {push.enabled && (
+        <>
+          <div className="segmented" role="group" aria-label="What moves">
+            <button className={push.scope === "column" ? "on" : ""} onClick={() => set({ scope: "column" })} title="Only content in the box's column (and below it)">
+              This column
+            </button>
+            <button className={push.scope === "page" ? "on" : ""} onClick={() => set({ scope: "page" })} title="Everything below the box, across the page">
+              Full width
+            </button>
+          </div>
+          <label className="check">
+            <input type="checkbox" checked={push.follow} onChange={(e) => set({ follow: e.target.checked })} />
+            Pull content up when the box gets shorter
+          </label>
+          <label className="field">
+            <span>Extra spacing</span>
+            <NumberField value={push.extra} min={-200} max={500} step={1} suffix="pt" onChange={(extra) => set({ extra })} label="Extra spacing" />
+          </label>
+          <p className="muted" style={{ margin: 0, fontSize: 12 }}>
+            {info && info.count > 0
+              ? `Moves ${info.count} item${info.count > 1 ? "s" : ""} ${info.dy > 0 ? "down" : "up"} ${Math.abs(info.dy).toFixed(1)} pt.`
+              : "Nothing moves yet: the box hasn't grown."}{" "}
+            Click an item on the page to keep it in place or move it too.
+          </p>
+          {info && info.offPage > 0 && (
+            <p className="note warn" style={{ margin: 0 }}>
+              {info.offPage} item{info.offPage > 1 ? "s" : ""} would move past the bottom of the page.
+            </p>
+          )}
+          {info && info.conflicts > 0 && (
+            <p className="note warn" style={{ margin: 0 }}>
+              Moved content will overlap {info.conflicts} item{info.conflicts > 1 ? "s that stay" : " that stays"} (outlined in red). Click
+              {info.conflicts > 1 ? " them" : " it"} to move {info.conflicts > 1 ? "them" : "it"} too, or switch to Full width.
+            </p>
+          )}
+          {pinned > 0 && (
+            <button className="link-btn" onClick={() => set({ overrides: {} })}>
+              Reset {pinned} manual choice{pinned > 1 ? "s" : ""}
+            </button>
+          )}
+        </>
+      )}
+    </div>
   );
 }
 

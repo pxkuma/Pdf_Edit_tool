@@ -1,12 +1,14 @@
 import { Check, MoveHorizontal, X } from "lucide-react";
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api } from "../../api/client";
 import type { Rect } from "../../api/types";
 import { registerCommit } from "../../lib/editSession";
 import { cssFamily, ensureFace } from "../../lib/fonts";
+import { boxGrowth, pushConflicts, selectPush, type PushCandidate } from "../../lib/push";
 import { autoBox, freeSpan, naturalWidth, scaleBox, widenBox, type HBox } from "../../lib/textBox";
-import { AUTO_BOX, useEditor, type ActiveEdit } from "../../store/editor";
+import { AUTO_BOX, DEFAULT_PUSH, useEditor, type ActiveEdit } from "../../store/editor";
 import { draftChanged, previewFace, reportEdit, styleFromDraft } from "./editHelpers";
+import { PushPreview } from "./PushPreview";
 import { TextBoxFrame, type BoxGesture } from "./TextBoxFrame";
 
 interface BlockEditorProps {
@@ -14,7 +16,9 @@ interface BlockEditorProps {
   edit: ActiveEdit;
   zoom: number;
   obstacles: { id: string; bbox: Rect }[]; // other text on the page
-  pageWidth: number;
+  candidates: PushCandidate[]; // what could move below the box
+  renderSrc: string | null;
+  pageSize: [number, number];
 }
 
 interface BoxLayout {
@@ -26,13 +30,15 @@ interface BoxLayout {
 const round2 = (value: number) => Math.round(value * 100) / 100;
 
 /** Edit a whole text block as a movable, resizable text box. */
-export function BlockEditor({ docId, edit, zoom, obstacles, pageWidth }: BlockEditorProps) {
+export function BlockEditor({ docId, edit, zoom, obstacles, candidates, renderSrc, pageSize }: BlockEditorProps) {
+  const pageWidth = pageSize[0];
   const { span, draft, page } = edit;
   const original = edit.blockBbox ?? span.bbox;
   const geometry = edit.box ?? AUTO_BOX;
   const initial = edit.blockText ?? span.text;
   const [text, setText] = useState(initial);
   const [family, setFamily] = useState(cssFamily(span.face, span));
+  const [rows, setRows] = useState(edit.lineCount ?? 1);
   const ref = useRef<HTMLTextAreaElement>(null);
   const textRef = useRef(text);
   textRef.current = text;
@@ -83,8 +89,48 @@ export function BlockEditor({ docId, edit, zoom, obstacles, pageWidth }: BlockEd
     const area = ref.current;
     if (!area) return;
     area.style.height = "auto";
-    area.style.height = `${Math.max(area.scrollHeight, minHeight)}px`;
+    const content = area.scrollHeight;
+    area.style.height = `${Math.max(content, minHeight)}px`;
+    setRows(Math.max(1, Math.round(content / (step * zoom))));
   });
+
+  // Content below: how far it moves and what moves (previewed live, sent on apply).
+  const push = edit.push ?? DEFAULT_PUSH;
+  const growth = boxGrowth({
+    rows,
+    lines: edit.lineCount ?? 1,
+    step,
+    originalStep: edit.lineStep ?? span.size * 1.2,
+    size: draft.size,
+    originalSize: span.size,
+  });
+  const pushDy = push.enabled ? Math.round(((push.follow ? growth : Math.max(0, growth)) + push.extra) * 100) / 100 : 0;
+  const columnX: [number, number] = [Math.min(original[0], layout.box.x), Math.max(original[2], layout.box.x + layout.box.width)];
+  const selection = useMemo(
+    () => selectPush(candidates, original, columnX, push, { width: pageSize[0], height: pageSize[1] }),
+    [candidates, original, columnX[0], columnX[1], push.scope, push.overrides, pageSize[0], pageSize[1]],
+  );
+  const pushRef = useRef({ dy: pushDy, items: selection.moving });
+  pushRef.current = { dy: pushDy, items: selection.moving };
+  const offPage = selection.moving.filter((m) => m.bbox[3] + pushDy > pageSize[1]).length;
+  const conflicts = useMemo(() => pushConflicts(selection.moving, selection.kept, pushDy), [selection, pushDy]);
+  const info =
+    Math.abs(pushDy) < 0.05
+      ? { count: 0, dy: 0, offPage: 0, conflicts: 0 }
+      : { count: selection.moving.length, dy: pushDy, offPage, conflicts: conflicts.length };
+  useEffect(() => {
+    const current = useEditor.getState().activeEdit?.pushInfo;
+    const changed = !current || (Object.keys(info) as (keyof typeof info)[]).some((k) => current[k] !== info[k]);
+    if (changed) {
+      patchEdit({ pushInfo: info });
+    }
+  });
+
+  const pushPayload = () => {
+    const { dy, items } = pushRef.current;
+    if (Math.abs(dy) < 0.05 || !items.length) return null;
+    return { dy, items: items.map((i) => ({ kind: i.kind, bbox: i.bbox, xref: i.xref ?? 0 })) };
+  };
 
   const commit = useCallback(async () => {
     registerCommit(null);
@@ -93,7 +139,7 @@ export function BlockEditor({ docId, edit, zoom, obstacles, pageWidth }: BlockEd
     const { box: hbox, maxWidth, auto } = layoutRef.current;
     setActiveEdit(null);
     const value = textRef.current;
-    const geometryChanged = box.dx !== 0 || box.dy !== 0 || box.width !== null;
+    const geometryChanged = box.dx !== 0 || box.dy !== 0 || box.width !== null || pushPayload() !== null;
     const unchanged = value === initial && latest.align === "left" && !latest.lineHeight && !geometryChanged;
     if (unchanged && !draftChanged(span, latest.draft)) return;
     const report = await run(() =>
@@ -108,6 +154,7 @@ export function BlockEditor({ docId, edit, zoom, obstacles, pageWidth }: BlockEd
         max_width: auto ? round2(maxWidth) : null,
         dx: round2(hbox.x - original[0]),
         dy: round2(box.dy),
+        push: pushPayload(),
       }),
     );
     reportEdit(report);
@@ -152,11 +199,26 @@ export function BlockEditor({ docId, edit, zoom, obstacles, pageWidth }: BlockEd
     ref.current?.focus();
   };
 
+  const togglePush = (item: PushCandidate, move: boolean) => {
+    const current = useEditor.getState().activeEdit?.push ?? DEFAULT_PUSH;
+    patchEdit({ push: { ...current, overrides: { ...current.overrides, [item.key]: move } } });
+    ref.current?.focus();
+  };
+
   const left = layout.box.x * zoom;
   const top = moved[1] * zoom;
 
   return (
     <>
+      <PushPreview
+        selection={selection}
+        conflicts={conflicts}
+        dy={pushDy}
+        zoom={zoom}
+        renderSrc={renderSrc}
+        pageSize={pageSize}
+        onToggle={togglePush}
+      />
       <div className="edit-chip" style={{ left, top }} onPointerDown={(e) => e.stopPropagation()}>
         <span className="chip-label">Text box</span>
         <button

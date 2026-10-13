@@ -2,6 +2,7 @@ import { useMemo, useRef } from "react";
 import type { PageModel, Span, TextBlock } from "../../api/types";
 import { flushEdit } from "../../lib/editSession";
 import { cssRect } from "../../lib/geometry";
+import { pushCandidates } from "../../lib/push";
 import { textBoxLines } from "../../lib/textBox";
 import { useEditor } from "../../store/editor";
 import { BlockEditor } from "./BlockEditor";
@@ -13,10 +14,11 @@ interface TextEditLayerProps {
   page: number;
   model: PageModel | null;
   zoom: number;
-  pageWidth: number;
+  pageSize: [number, number];
+  renderSrc: string | null;
 }
 
-export function TextEditLayer({ docId, page, model, zoom, pageWidth }: TextEditLayerProps) {
+export function TextEditLayer({ docId, page, model, zoom, pageSize, renderSrc }: TextEditLayerProps) {
   const activeEdit = useEditor((s) => (s.activeEdit?.page === page ? s.activeEdit : null));
   const setActiveEdit = useEditor((s) => s.setActiveEdit);
   const blocks = model?.text.blocks ?? [];
@@ -41,6 +43,7 @@ export function TextEditLayer({ docId, page, model, zoom, pageWidth }: TextEditL
       ),
     [blocks, editingSpans],
   );
+  const candidates = useMemo(() => (model ? pushCandidates(model, editingSpans) : []), [model, editingSpans]);
 
   const startSpan = async (span: Span) => {
     await flushEdit();
@@ -100,7 +103,11 @@ export function TextEditLayer({ docId, page, model, zoom, pageWidth }: TextEditL
         <SpanEditor key={activeEdit.span.id} docId={docId} edit={activeEdit} zoom={zoom} block={blockOf.get(activeEdit.span.id) ?? null} />
       )}
       {activeEdit?.mode === "block" && (
-        <BlockEditor key={`blk-${activeEdit.span.id}`} docId={docId} edit={activeEdit} zoom={zoom} obstacles={obstacles} pageWidth={pageWidth} />
+        <BlockEditor key={`blk-${activeEdit.span.id}`} docId={docId} edit={activeEdit} zoom={zoom} obstacles={obstacles}
+          candidates={candidates}
+          renderSrc={renderSrc}
+          pageSize={pageSize}
+        />
       )}
     </div>
   );

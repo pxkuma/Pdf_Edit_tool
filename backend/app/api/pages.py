@@ -10,7 +10,8 @@ from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, Response
 
 from .. import deps
-from ..pdf import annots, extract, forms, images, ocr, pages
+from ..pdf import annots, extract, forms, images, ocr, pages, push
+from ..pdf.geometry import to_display_rect
 from ..storage import PDF_LOCK
 from . import schemas
 from .common import check_page, mutate, ok, read_upload, single_page
@@ -66,6 +67,7 @@ def model(doc_id: str, index: int) -> dict:
                 "text": _with_faces(extract.page_text_model(page)),
                 "annotations": annots.list_annotations(page),
                 "images": images.list_images(doc, page),
+                "drawings": [to_display_rect(page, r) for r in push.drawing_clusters(page)],
                 "fields": forms.list_fields_on_page(page),
                 "scan": ocr.page_scan_info(page),
             }

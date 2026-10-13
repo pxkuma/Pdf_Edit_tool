@@ -69,7 +69,7 @@ export const PageView = memo(function PageView({ docId, info, zoom, visible, too
   const isMarkup = (MARKUP_TOOLS as readonly string[]).includes(tool);
   const layers = () => {
     if (!visible) return null;
-    if (tool === "editText") return <TextEditLayer docId={docId} page={info.index} model={model} zoom={zoom} pageWidth={info.width} />;
+    if (tool === "editText") return <TextEditLayer docId={docId} page={info.index} model={model} zoom={zoom} pageSize={[info.width, info.height]} renderSrc={shown} />;
     if (isMarkup) {
       return <WordSelectLayer docId={docId} page={info.index} model={model} zoom={zoom} markup={tool as MarkupTool} pageRef={ref} />;
     }

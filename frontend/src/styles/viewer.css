@@ -560,3 +560,49 @@
   max-width: 100%;
   max-height: 100%;
 }
+
+/* Live preview of content pushed down by a growing text box */
+.push-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.push-cover {
+  position: absolute;
+  z-index: 15;
+  background: #fff;
+}
+
+.push-ghost,
+.push-kept {
+  position: absolute;
+  z-index: 16;
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+.push-ghost {
+  background-color: #fff;
+  background-repeat: no-repeat;
+  outline: 1px dashed rgb(26 95 180 / 0.55);
+}
+
+.push-ghost:hover {
+  outline: 2px solid var(--accent);
+}
+
+.push-kept {
+  outline: 1px dotted rgb(0 0 0 / 0.25);
+}
+
+.push-kept.conflict {
+  z-index: 17;
+  outline: 2px solid var(--danger);
+  background: rgb(220 38 38 / 0.08);
+}
+
+.push-kept:hover {
+  outline: 1px dashed var(--accent);
+  background: rgb(26 95 180 / 0.06);
+}
