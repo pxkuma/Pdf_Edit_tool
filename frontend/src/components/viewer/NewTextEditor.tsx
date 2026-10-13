@@ -1,11 +1,14 @@
 import { Check, MoveHorizontal, X } from "lucide-react";
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import type { Rect } from "../../api/types";
 import { api } from "../../api/client";
 import { registerCommit } from "../../lib/editSession";
 import { cssFamily, ensureFace, findFace, useFonts, variantOf } from "../../lib/fonts";
+import { NUDGE, SNAP_PX, snapBox, snapEdge, snapTargets, type Guides } from "../../lib/snap";
 import { naturalWidth, scaleBox, widenBox, type HBox } from "../../lib/textBox";
 import { useEditor } from "../../store/editor";
 import { reportEdit } from "./editHelpers";
+import { SnapGuides } from "./SnapGuides";
 import { TextBoxFrame, type BoxGesture } from "./TextBoxFrame";
 
 interface NewTextEditorProps {
@@ -15,13 +18,15 @@ interface NewTextEditorProps {
   x: number;
   y: number;
   width: number | null; // null = auto width (no wrapping except at line breaks)
+  snapRects: Rect[];
+  pageSize: [number, number];
   onDone: () => void;
 }
 
 const NO_WRAP = 20000;
 const round2 = (value: number) => Math.round(value * 100) / 100;
 
-export function NewTextEditor({ docId, page, zoom, x, y, width: initialWidth, onDone }: NewTextEditorProps) {
+export function NewTextEditor({ docId, page, zoom, x, y, width: initialWidth, snapRects, pageSize, onDone }: NewTextEditorProps) {
   const style = useEditor((s) => s.newText);
   const patchNewText = useEditor((s) => s.patchNewText);
   const run = useEditor((s) => s.run);
@@ -30,6 +35,11 @@ export function NewTextEditor({ docId, page, zoom, x, y, width: initialWidth, on
   const [pos, setPos] = useState({ x, y });
   const [width, setWidth] = useState<number | null>(initialWidth);
   const [family, setFamily] = useState("sans-serif");
+  const [guides, setGuides] = useState<Guides>({});
+  const targets = useMemo(
+    () => snapTargets(snapRects, { width: pageSize[0], height: pageSize[1] }),
+    [snapRects, pageSize[0], pageSize[1]],
+  );
   const ref = useRef<HTMLTextAreaElement>(null);
 
   const baseFace = style.faceId ?? defaultFace;
@@ -108,15 +118,24 @@ export function NewTextEditor({ docId, page, zoom, x, y, width: initialWidth, on
   const onGesture = (gesture: BoxGesture) => {
     const start = state.current;
     const startSize = useEditor.getState().newText.size;
-    return (dxPx: number, dyPx: number) => {
+    const height = (ref.current?.offsetHeight ?? 0) / zoom;
+    const threshold = SNAP_PX / zoom;
+    return (dxPx: number, dyPx: number, free: boolean) => {
       const dx = dxPx / zoom;
       const dy = dyPx / zoom;
       if (gesture === "move") {
-        setPos({ x: start.pos.x + dx, y: start.pos.y + dy });
+        const proposed = { x: start.pos.x + dx, y: start.pos.y + dy, width: start.box.width, height };
+        const snapped = free ? { ...proposed, guides: {} } : snapBox(proposed, targets, threshold);
+        setGuides(snapped.guides);
+        setPos({ x: snapped.x, y: snapped.y });
       } else if (gesture === "e" || gesture === "w") {
         const next = widenBox(start.box, gesture, dx);
-        setPos({ x: next.x, y: start.pos.y });
-        setWidth(next.width);
+        const edge = gesture === "e" ? next.x + next.width : next.x;
+        const snapped = free ? { value: edge, guide: undefined } : snapEdge(edge, targets.xs, threshold);
+        const fixed = widenBox(next, gesture, snapped.value - edge);
+        setGuides({ x: snapped.guide });
+        setPos({ x: fixed.x, y: start.pos.y });
+        setWidth(fixed.width);
       } else {
         const scaled = scaleBox(start.box, startSize, gesture, dx);
         patchNewText({ size: scaled.size });
@@ -138,6 +157,7 @@ export function NewTextEditor({ docId, page, zoom, x, y, width: initialWidth, on
   const auto = width === null;
   return (
     <>
+      <SnapGuides guides={guides} zoom={zoom} />
       <div className="edit-chip" style={{ left, top }} onPointerDown={(e) => e.stopPropagation()}>
         <button
           className={`icon-btn small${auto ? " active" : ""}`}
@@ -160,7 +180,10 @@ export function NewTextEditor({ docId, page, zoom, x, y, width: initialWidth, on
         width={box.width * zoom}
         autoWidth={auto}
         onGesture={onGesture}
-        onGestureEnd={() => ref.current?.focus()}
+        onGestureEnd={() => {
+          setGuides({});
+          ref.current?.focus();
+        }}
         onAutoWidth={() => setAutoWidth(true)}
       >
         <textarea
@@ -187,6 +210,12 @@ export function NewTextEditor({ docId, page, zoom, x, y, width: initialWidth, on
             e.stopPropagation();
             if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) void commit();
             if (e.key === "Escape") cancel();
+            const arrow = NUDGE[e.key];
+            if (arrow && e.altKey) {
+              e.preventDefault();
+              const step = e.shiftKey ? 10 : 1;
+              setPos((p) => ({ x: p.x + arrow[0] * step, y: p.y + arrow[1] * step }));
+            }
           }}
           aria-label="New text"
         />

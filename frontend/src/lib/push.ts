@@ -17,6 +17,7 @@ export interface PushCandidate {
   kind: PushKind;
   bbox: Rect;
   xref?: number;
+  group?: string; // text block: cells of one row move together
 }
 
 export interface PushOptions {
@@ -38,7 +39,7 @@ export function pushCandidates(model: PageModel, boxSpanIds: ReadonlySet<string>
   for (const block of model.text.blocks) {
     for (const line of block.lines) {
       if (line.spans.some((s) => boxSpanIds.has(s.id)) || !line.spans.some((s) => s.text.trim())) continue;
-      items.push({ key: `t:${line.id}`, kind: "text", bbox: line.bbox });
+      items.push({ key: `t:${line.id}`, kind: "text", bbox: line.bbox, group: block.id });
     }
   }
   (model.drawings ?? []).forEach((bbox, i) => items.push({ key: `d:${i}`, kind: "drawing", bbox }));
@@ -62,21 +63,26 @@ export function selectPush(
   page: { width: number; height: number },
 ): PushSelection {
   const below = candidates.filter((c) => c.bbox[1] >= box[3] - 1).sort((a, b) => a.bbox[1] - b.bbox[1]);
-  const movers: { x: [number, number]; top: number }[] = [{ x: columnX, top: box[1] }];
-  const moving: PushCandidate[] = [];
-  const kept: PushCandidate[] = [];
-  for (const item of below) {
-    const inFlow = options.scope === "page" || movers.some((m) => m.top <= item.bbox[1] && overlapX(m.x, item.bbox));
-    const footer = item.bbox[1] > page.height * FOOTER_ZONE;
-    const moves = options.overrides[item.key] ?? (inFlow && !footer);
-    if (moves) {
-      moving.push(item);
-      movers.push({ x: [item.bbox[0], item.bbox[2]], top: item.bbox[1] });
-    } else {
-      kept.push(item);
+  const moves = new Set<string>();
+  // Grow the moving set until stable: flow below movers, plus whole rows (groups).
+  for (let changed = true; changed; ) {
+    changed = false;
+    const movers = [{ x: columnX, top: box[1] }, ...below.filter((i) => moves.has(i.key)).map((i) => ({ x: [i.bbox[0], i.bbox[2]] as [number, number], top: i.bbox[1] }))];
+    const groups = new Set(below.filter((i) => moves.has(i.key) && i.group).map((i) => i.group));
+    for (const item of below) {
+      if (moves.has(item.key)) continue;
+      const inFlow =
+        options.scope === "page" ||
+        movers.some((m) => m.top <= item.bbox[1] && overlapX(m.x, item.bbox)) ||
+        (item.group !== undefined && groups.has(item.group));
+      const footer = item.bbox[1] > page.height * FOOTER_ZONE;
+      if (options.overrides[item.key] ?? (inFlow && !footer)) {
+        moves.add(item.key);
+        changed = true;
+      }
     }
   }
-  return { moving, kept };
+  return { moving: below.filter((i) => moves.has(i.key)), kept: below.filter((i) => !moves.has(i.key)) };
 }
 
 export interface GrowthInput {

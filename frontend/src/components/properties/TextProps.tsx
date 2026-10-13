@@ -2,7 +2,7 @@ import { AlignCenter, AlignJustify, AlignLeft, AlignRight, Bold, Italic, Striket
 import { ColorPicker } from "../common/ColorPicker";
 import { FontPicker } from "../common/FontPicker";
 import { NumberField } from "../common/NumberField";
-import { DEFAULT_PUSH, useEditor, type PushDraft } from "../../store/editor";
+import { AUTO_BOX, DEFAULT_PUSH, useEditor, type PushDraft } from "../../store/editor";
 
 type Align = "left" | "center" | "right" | "justify";
 
@@ -160,6 +160,7 @@ export function ActiveEditProps() {
         <>
         <div className="prop-section">
           <h4>Layout</h4>
+          <BoxGeometry />
           <AlignControl value={edit.align} onChange={(align) => patchEdit({ align })} />
           <label className="field">
             <span>Line spacing</span>
@@ -191,8 +192,9 @@ export function ActiveEditProps() {
             Auto width: use free space before wrapping
           </label>
           <p className="muted" style={{ margin: 0, fontSize: 12 }}>
-            Drag the border to move. Side handles set the width and the text wraps inside it.
-            Corner handles resize the text. Ctrl+Enter applies, Esc cancels.
+            Drag the border to move; it snaps to other text and the page centre (hold Alt to move freely).
+            Alt+arrow keys nudge by 1 pt, Alt+Shift+arrows by 10 pt. Side handles set the width; corner handles
+            resize the text. Ctrl+Enter applies, Esc cancels.
           </p>
         </div>
         <PushProps />
@@ -233,6 +235,40 @@ export function ActiveEditProps() {
         </div>
       )}
     </>
+  );
+}
+
+/** Exact position and width of the text box being edited (points). */
+function BoxGeometry() {
+  const edit = useEditor((s) => s.activeEdit);
+  const patchEdit = useEditor((s) => s.patchEdit);
+  if (!edit?.boxInfo) return null;
+  const info = edit.boxInfo;
+  const box = edit.box ?? AUTO_BOX;
+  const original = edit.blockBbox ?? edit.span.bbox;
+  return (
+    <div className="grid-3">
+      <label className="field">
+        <span>X</span>
+        <NumberField value={info.x} step={1} suffix="pt" label="Box left" onChange={(x) => patchEdit({ box: { ...box, dx: box.dx + x - info.x } })} />
+      </label>
+      <label className="field">
+        <span>Y</span>
+        <NumberField value={info.y} step={1} suffix="pt" label="Box top" onChange={(y) => patchEdit({ box: { ...box, dy: box.dy + y - info.y } })} />
+      </label>
+      <label className="field">
+        <span>W</span>
+        <NumberField
+          value={info.width}
+          min={12}
+          step={1}
+          suffix="pt"
+          label="Box width"
+          placeholder="auto"
+          onChange={(width) => patchEdit({ box: { dx: info.x - original[0], dy: box.dy, width } })}
+        />
+      </label>
+    </div>
   );
 }
 

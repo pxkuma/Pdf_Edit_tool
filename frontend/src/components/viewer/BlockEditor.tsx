@@ -5,10 +5,12 @@ import type { Rect } from "../../api/types";
 import { registerCommit } from "../../lib/editSession";
 import { cssFamily, ensureFace } from "../../lib/fonts";
 import { boxGrowth, pushConflicts, selectPush, type PushCandidate } from "../../lib/push";
+import { NUDGE, SNAP_PX, snapBox, snapEdge, snapTargets, type Guides } from "../../lib/snap";
 import { autoBox, freeSpan, naturalWidth, scaleBox, widenBox, type HBox } from "../../lib/textBox";
 import { AUTO_BOX, DEFAULT_PUSH, useEditor, type ActiveEdit } from "../../store/editor";
 import { draftChanged, previewFace, reportEdit, styleFromDraft } from "./editHelpers";
 import { PushPreview } from "./PushPreview";
+import { SnapGuides } from "./SnapGuides";
 import { TextBoxFrame, type BoxGesture } from "./TextBoxFrame";
 
 interface BlockEditorProps {
@@ -39,6 +41,11 @@ export function BlockEditor({ docId, edit, zoom, obstacles, candidates, renderSr
   const [text, setText] = useState(initial);
   const [family, setFamily] = useState(cssFamily(span.face, span));
   const [rows, setRows] = useState(edit.lineCount ?? 1);
+  const [guides, setGuides] = useState<Guides>({});
+  const targets = useMemo(
+    () => snapTargets(obstacles.map((o) => o.bbox), { width: pageSize[0], height: pageSize[1] }),
+    [obstacles, pageSize[0], pageSize[1]],
+  );
   const ref = useRef<HTMLTextAreaElement>(null);
   const textRef = useRef(text);
   textRef.current = text;
@@ -118,6 +125,13 @@ export function BlockEditor({ docId, edit, zoom, obstacles, candidates, renderSr
     Math.abs(pushDy) < 0.05
       ? { count: 0, dy: 0, offPage: 0, conflicts: 0 }
       : { count: selection.moving.length, dy: pushDy, offPage, conflicts: conflicts.length };
+  const boxInfo = { x: round2(layout.box.x), y: round2(moved[1]), width: round2(layout.box.width), auto: layout.auto };
+  useEffect(() => {
+    const currentBox = useEditor.getState().activeEdit?.boxInfo;
+    if (!currentBox || (Object.keys(boxInfo) as (keyof typeof boxInfo)[]).some((k) => currentBox[k] !== boxInfo[k])) {
+      patchEdit({ boxInfo });
+    }
+  });
   useEffect(() => {
     const current = useEditor.getState().activeEdit?.pushInfo;
     const changed = !current || (Object.keys(info) as (keyof typeof info)[]).some((k) => current[k] !== info[k]);
@@ -175,14 +189,24 @@ export function BlockEditor({ docId, edit, zoom, obstacles, candidates, renderSr
     const startBox = start.box ?? AUTO_BOX;
     const startLayout = layoutRef.current.box;
     const startSize = start.draft.size;
-    return (dxPx: number, dyPx: number) => {
+    const startTop = original[1] + startBox.dy;
+    const height = (ref.current?.offsetHeight ?? 0) / zoom;
+    const threshold = SNAP_PX / zoom;
+    return (dxPx: number, dyPx: number, free: boolean) => {
       const dx = dxPx / zoom;
       const dy = dyPx / zoom;
       if (gesture === "move") {
-        patchEdit({ box: { ...startBox, dx: startBox.dx + dx, dy: startBox.dy + dy } });
+        const proposed = { x: startLayout.x + dx, y: startTop + dy, width: startLayout.width, height };
+        const snapped = free ? { ...proposed, guides: {} } : snapBox(proposed, targets, threshold);
+        setGuides(snapped.guides);
+        patchEdit({ box: { ...startBox, dx: startBox.dx + snapped.x - startLayout.x, dy: startBox.dy + snapped.y - startTop } });
       } else if (gesture === "e" || gesture === "w") {
         const next = widenBox(startLayout, gesture, dx);
-        patchEdit({ box: { dx: next.x - original[0], dy: startBox.dy, width: next.width } });
+        const edge = gesture === "e" ? next.x + next.width : next.x;
+        const snapped = free ? { value: edge, guide: undefined } : snapEdge(edge, targets.xs, threshold);
+        const fixed = widenBox(next, gesture, snapped.value - edge);
+        setGuides({ x: snapped.guide });
+        patchEdit({ box: { dx: fixed.x - original[0], dy: startBox.dy, width: fixed.width } });
       } else {
         const scaled = scaleBox(startLayout, startSize, gesture, dx);
         const current = useEditor.getState().activeEdit;
@@ -191,6 +215,11 @@ export function BlockEditor({ docId, edit, zoom, obstacles, candidates, renderSr
         patchEdit({ draft: { ...current.draft, size: scaled.size }, box });
       }
     };
+  };
+
+  const nudge = (dx: number, dy: number) => {
+    const current = useEditor.getState().activeEdit?.box ?? AUTO_BOX;
+    patchEdit({ box: { ...current, dx: current.dx + dx, dy: current.dy + dy } });
   };
 
   const setAutoWidth = (auto: boolean) => {
@@ -210,6 +239,7 @@ export function BlockEditor({ docId, edit, zoom, obstacles, candidates, renderSr
 
   return (
     <>
+      <SnapGuides guides={guides} zoom={zoom} />
       <PushPreview
         selection={selection}
         conflicts={conflicts}
@@ -242,7 +272,10 @@ export function BlockEditor({ docId, edit, zoom, obstacles, candidates, renderSr
         width={layout.box.width * zoom}
         autoWidth={layout.auto}
         onGesture={onGesture}
-        onGestureEnd={() => ref.current?.focus()}
+        onGestureEnd={() => {
+          setGuides({});
+          ref.current?.focus();
+        }}
         onAutoWidth={() => setAutoWidth(true)}
       >
         <textarea
@@ -268,6 +301,12 @@ export function BlockEditor({ docId, edit, zoom, obstacles, candidates, renderSr
             e.stopPropagation();
             if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) void commit();
             if (e.key === "Escape") cancel();
+            const arrow = NUDGE[e.key];
+            if (arrow && e.altKey) {
+              e.preventDefault();
+              const step = e.shiftKey ? 10 : 1;
+              nudge(arrow[0] * step, arrow[1] * step);
+            }
           }}
           aria-label="Edit text box"
         />

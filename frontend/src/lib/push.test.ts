@@ -67,3 +67,21 @@ describe("pushConflicts", () => {
     expect(pushConflicts(moving, kept, 0)).toEqual([]);
   });
 });
+
+describe("selectPush rows", () => {
+  it("moves the cells of a row together, even outside the column", () => {
+    const date = item("date", [72, 120, 165, 132]);
+    const cell = { ...item("item", [72, 150, 96, 162]), group: "row" };
+    const amount = { ...item("amount", [360, 150, 400, 162]), group: "row" };
+    const sidebar = { ...item("sidebar", [420, 140, 560, 152]), group: "side" };
+    const { moving } = selectPush([amount, cell, date, sidebar], [120, 90, 245, 104], [120, 245], { scope: "column", overrides: {} }, page);
+    expect(moving.map((m) => m.key).sort()).toEqual(["amount", "date", "item"]);
+  });
+
+  it("still lets the user pin one cell", () => {
+    const cell = { ...item("item", [72, 150, 96, 162]), group: "row" };
+    const amount = { ...item("amount", [360, 150, 400, 162]), group: "row" };
+    const { moving } = selectPush([amount, cell], [72, 90, 245, 104], [72, 245], { scope: "column", overrides: { amount: false } }, page);
+    expect(moving.map((m) => m.key)).toEqual(["item"]);
+  });
+});

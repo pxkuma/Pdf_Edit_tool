@@ -21,6 +21,7 @@ interface SpanEditorProps {
   edit: ActiveEdit;
   zoom: number;
   block: TextBlock | null;
+  background: string; // colour behind the text, so the input blends in
 }
 
 const measureCanvas = document.createElement("canvas");
@@ -32,7 +33,7 @@ function measure(text: string, font: string, letterSpacing: number): number {
   return ctx.measureText(text).width + Math.max(0, text.length - 1) * letterSpacing;
 }
 
-export function SpanEditor({ docId, edit, zoom, block }: SpanEditorProps) {
+export function SpanEditor({ docId, edit, zoom, block, background }: SpanEditorProps) {
   const { span, draft, page } = edit;
   const [text, setText] = useState(span.text);
   const [offset, setOffset] = useState<[number, number]>([0, 0]);
@@ -130,6 +131,7 @@ export function SpanEditor({ docId, edit, zoom, block }: SpanEditorProps) {
     lineHeight: `${height}px`,
     letterSpacing,
     color: draft.color,
+    background,
     opacity: Math.max(draft.opacity, 0.35),
     textDecoration: decorations || undefined,
     transform: Math.abs(scaleX - 1) > 0.001 ? `scaleX(${scaleX})` : undefined,

@@ -213,6 +213,11 @@
   overflow: hidden;
 }
 
+/* Transparent: the cover hides the original text; elsewhere the real page shows through. */
+.block-editor {
+  background: transparent;
+}
+
 .text-box-editor {
   background: rgb(255 255 255 / 0.7);
   white-space: pre;
@@ -605,4 +610,24 @@
 .push-kept:hover {
   outline: 1px dashed var(--accent);
   background: rgb(26 95 180 / 0.06);
+}
+
+/* Smart guides while moving/resizing a text box */
+.snap-guide {
+  position: absolute;
+  z-index: 25;
+  pointer-events: none;
+  background: #e0157a;
+}
+
+.snap-guide.v {
+  top: 0;
+  bottom: 0;
+  width: 1px;
+}
+
+.snap-guide.h {
+  left: 0;
+  right: 0;
+  height: 1px;
 }

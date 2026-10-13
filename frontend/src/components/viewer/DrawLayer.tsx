@@ -15,6 +15,7 @@ interface DrawLayerProps {
   tool: Tool;
   pageSize: [number, number];
   pageRef: RefObject<HTMLDivElement>;
+  snapRects?: Rect[]; // text on the page, for smart guides when adding text
 }
 
 const RECT_TOOLS: Tool[] = ["rect", "ellipse", "textbox", "whiteout", "redact", "eraseText", "crop", "fieldText", "fieldCheckbox", "image"];
@@ -27,7 +28,7 @@ function arrowHead(a: Point, b: Point, size: number): string {
   return `M ${p1[0]} ${p1[1]} L ${b[0]} ${b[1]} L ${p2[0]} ${p2[1]}`;
 }
 
-export function DrawLayer({ docId, page, zoom, tool, pageSize, pageRef }: DrawLayerProps) {
+export function DrawLayer({ docId, page, zoom, tool, pageSize, pageRef, snapRects }: DrawLayerProps) {
   const toPoint = usePagePoint(pageRef, zoom);
   const [start, setStart] = useState<Point | null>(null);
   const [current, setCurrent] = useState<Point | null>(null);
@@ -223,7 +224,17 @@ export function DrawLayer({ docId, page, zoom, tool, pageSize, pageRef }: DrawLa
       )}
       {popover && <ToolPopover docId={docId} page={page} zoom={zoom} state={popover} onClose={() => setPopover(null)} />}
       {newText && (
-        <NewTextEditor docId={docId} page={page} zoom={zoom} x={newText.x} y={newText.y} width={newText.width} onDone={() => setNewText(null)} />
+        <NewTextEditor
+          docId={docId}
+          page={page}
+          zoom={zoom}
+          x={newText.x}
+          y={newText.y}
+          width={newText.width}
+          snapRects={snapRects ?? []}
+          pageSize={pageSize}
+          onDone={() => setNewText(null)}
+        />
       )}
     </div>
   );

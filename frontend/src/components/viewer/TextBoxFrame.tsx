@@ -10,8 +10,8 @@ interface TextBoxFrameProps {
   top: number;
   width: number;
   autoWidth: boolean;
-  /** Called when a drag starts; returns the live update for pointer deltas (CSS px). */
-  onGesture: (gesture: BoxGesture) => (dx: number, dy: number) => void;
+  /** Called when a drag starts; returns the live update for pointer deltas (CSS px). Alt = no snapping. */
+  onGesture: (gesture: BoxGesture) => (dx: number, dy: number, free: boolean) => void;
   onGestureEnd: () => void;
   onAutoWidth: () => void;
   children: ReactNode;
@@ -23,13 +23,14 @@ const CORNERS: CornerHandle[] = ["sw", "se"];
 /**
  * A movable, resizable frame around an inline text editor.
  * Border: move. Side handles: box width (text wraps inside it). Corner handles:
- * scale the text. Double-clicking a side handle returns to auto width.
+ * scale the text. Double-clicking a side handle returns to auto width. Moving and
+ * resizing snap to other text and the page centre; hold Alt to move freely.
  */
 export function TextBoxFrame({ left, top, width, autoWidth, onGesture, onGestureEnd, onAutoWidth, children }: TextBoxFrameProps) {
   const begin = (gesture: BoxGesture) => (event: ReactPointerEvent) => {
     if (event.button !== 0) return;
     const update = onGesture(gesture);
-    startDrag(event, (dx, dy) => update(dx, dy), () => onGestureEnd());
+    startDrag(event, (dx, dy, e) => update(dx, dy, e.altKey), () => onGestureEnd());
   };
 
   return (

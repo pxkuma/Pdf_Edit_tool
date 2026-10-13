@@ -2,6 +2,7 @@ import { useMemo, useRef } from "react";
 import type { PageModel, Span, TextBlock } from "../../api/types";
 import { flushEdit } from "../../lib/editSession";
 import { cssRect } from "../../lib/geometry";
+import { useBackgrounds } from "../../lib/background";
 import { pushCandidates } from "../../lib/push";
 import { textBoxLines } from "../../lib/textBox";
 import { useEditor } from "../../store/editor";
@@ -44,6 +45,8 @@ export function TextEditLayer({ docId, page, model, zoom, pageSize, renderSrc }:
     [blocks, editingSpans],
   );
   const candidates = useMemo(() => (model ? pushCandidates(model, editingSpans) : []), [model, editingSpans]);
+  const coverRect = activeEdit ? (activeEdit.mode === "block" && activeEdit.blockBbox ? activeEdit.blockBbox : activeEdit.span.bbox) : null;
+  const [background] = useBackgrounds(renderSrc, pageSize[0], coverRect ? [coverRect] : []);
 
   const startSpan = async (span: Span) => {
     await flushEdit();
@@ -69,7 +72,6 @@ export function TextEditLayer({ docId, page, model, zoom, pageSize, renderSrc }:
   };
 
   const editingId = activeEdit?.span.id;
-  const editingBlock = activeEdit?.mode === "block" ? activeEdit.blockBbox : null;
 
   return (
     <div className="layer text-cursor" onPointerDown={() => void flushEdit()}>
@@ -94,13 +96,16 @@ export function TextEditLayer({ docId, page, model, zoom, pageSize, renderSrc }:
           }),
         ),
       )}
-      {activeEdit && (
-        <div
-          style={{ ...cssRect(activeEdit.mode === "block" && editingBlock ? editingBlock : activeEdit.span.bbox, zoom), position: "absolute", background: "#fff" }}
-        />
-      )}
+      {coverRect && <div style={{ ...cssRect(coverRect, zoom), position: "absolute", background: background ?? "#fff" }} />}
       {activeEdit?.mode === "span" && (
-        <SpanEditor key={activeEdit.span.id} docId={docId} edit={activeEdit} zoom={zoom} block={blockOf.get(activeEdit.span.id) ?? null} />
+        <SpanEditor
+          key={activeEdit.span.id}
+          docId={docId}
+          edit={activeEdit}
+          zoom={zoom}
+          block={blockOf.get(activeEdit.span.id) ?? null}
+          background={background ?? "#fff"}
+        />
       )}
       {activeEdit?.mode === "block" && (
         <BlockEditor key={`blk-${activeEdit.span.id}`} docId={docId} edit={activeEdit} zoom={zoom} obstacles={obstacles}

@@ -1,5 +1,6 @@
 import type { CSSProperties } from "react";
 import type { Rect } from "../../api/types";
+import { useBackgrounds } from "../../lib/background";
 import type { PushCandidate, PushSelection } from "../../lib/push";
 
 interface PushPreviewProps {
@@ -30,6 +31,7 @@ function box(rect: Rect, zoom: number, dy = 0): CSSProperties {
  * move it too.
  */
 export function PushPreview({ selection, conflicts, dy, zoom, renderSrc, pageSize, onToggle }: PushPreviewProps) {
+  const backgrounds = useBackgrounds(renderSrc, pageSize[0], selection.moving.map((m) => m.bbox));
   if (Math.abs(dy) < 0.05) return null;
   const ghost = (rect: Rect): CSSProperties => ({
     ...box(rect, zoom, dy),
@@ -40,8 +42,8 @@ export function PushPreview({ selection, conflicts, dy, zoom, renderSrc, pageSiz
 
   return (
     <div className="push-layer">
-      {selection.moving.map((item) => (
-        <div key={`c-${item.key}`} className="push-cover" style={box(item.bbox, zoom)} />
+      {selection.moving.map((item, i) => (
+        <div key={`c-${item.key}`} className="push-cover" style={{ ...box(item.bbox, zoom), background: backgrounds[i] }} />
       ))}
       {selection.moving.map((item) => (
         <div

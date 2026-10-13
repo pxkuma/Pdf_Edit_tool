@@ -74,7 +74,10 @@ export const PageView = memo(function PageView({ docId, info, zoom, visible, too
       return <WordSelectLayer docId={docId} page={info.index} model={model} zoom={zoom} markup={tool as MarkupTool} pageRef={ref} />;
     }
     if (DRAW_TOOLS.includes(tool)) {
-      return <DrawLayer docId={docId} page={info.index} zoom={zoom} tool={tool} pageSize={[info.width, info.height]} pageRef={ref} />;
+      const snapRects = tool === "addText" ? model?.text.blocks.flatMap((b) => b.lines.map((l) => l.bbox)) : undefined;
+      return (
+        <DrawLayer docId={docId} page={info.index} zoom={zoom} tool={tool} pageSize={[info.width, info.height]} pageRef={ref} snapRects={snapRects} />
+      );
     }
     if (tool === "select") {
       return (

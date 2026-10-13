@@ -105,6 +105,14 @@ export interface PushDraft {
 
 export const DEFAULT_PUSH: PushDraft = { enabled: true, scope: "column", follow: false, extra: 0, overrides: {} };
 
+/** Where the text box currently is (page points), for the X/Y/W fields. */
+export interface BoxInfo {
+  x: number;
+  y: number;
+  width: number;
+  auto: boolean;
+}
+
 /** What the live preview currently moves (shown in Properties). */
 export interface PushInfo {
   count: number;
@@ -127,6 +135,7 @@ export interface ActiveEdit {
   lineCount?: number; // lines the box had originally
   push?: PushDraft;
   pushInfo?: PushInfo;
+  boxInfo?: BoxInfo;
   draft: SpanDraft;
   align: "left" | "center" | "right" | "justify";
 }
