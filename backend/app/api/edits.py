@@ -51,7 +51,8 @@ def edit_span(doc_id: str, body: schemas.SpanEditBody) -> dict:
 
 @router.post("/text/block")
 def edit_block(doc_id: str, body: schemas.BlockEditBody) -> dict:
-    edit = BlockEdit(body.bbox, body.text, _style(body.style), body.align, body.line_height)
+    edit = BlockEdit(body.bbox, body.text, _style(body.style), body.align, body.line_height,
+                     body.width, body.max_width, body.dx, body.dy)
     operation = single_page(body.page, lambda doc, page: asdict(textedit.edit_block(doc, page, deps.catalog(), edit)))
     return mutate(doc_id, "Edited paragraph", operation)
 
@@ -59,7 +60,7 @@ def edit_block(doc_id: str, body: schemas.BlockEditBody) -> dict:
 @router.post("/text/add")
 def add_text(doc_id: str, body: schemas.AddTextBody) -> dict:
     item = NewText(body.x, body.y, body.text, _style(body.style, require_font=True), body.width,
-                   body.align, body.line_height, body.rotation)
+                   body.align, body.line_height, body.rotation, body.max_width)
     operation = single_page(body.page, lambda doc, page: asdict(textedit.add_text(doc, page, deps.catalog(), item)))
     return mutate(doc_id, f"Added text “{_preview(body.text)}”", operation)
 

@@ -52,6 +52,15 @@ class BlockEdit:
     style: StyleRequest = field(default_factory=StyleRequest)
     align: str = "left"
     line_height: float | None = None
+    width: float | None = None  # box width the lines are aligned in (None: original block)
+    max_width: float | None = None  # wrap limit for auto-width boxes (None: ``width``)
+    dx: float = 0.0  # move, display space
+    dy: float = 0.0
+
+
+# Browser and PDF font metrics differ by a fraction of a percent: never push the
+# last word of a line that visibly fits in the box onto the next line.
+WRAP_TOLERANCE = 1.01
 
 
 @dataclass(frozen=True)
@@ -64,6 +73,7 @@ class NewText:
     align: str = "left"
     line_height: float = 1.2
     rotation: int = 0
+    max_width: float | None = None  # wrap limit for auto-width boxes (None: ``width``)
 
 
 @dataclass(frozen=True)
@@ -472,6 +482,7 @@ def _display_delta(page: fitz.Page, dx: float, dy: float) -> tuple[float, float]
 def _wrap(chain: FontChain, text: str, style: TextStyle, max_width: float | None) -> list[tuple[list[Glyph], bool]]:
     """Return lines as (glyphs, is_paragraph_end)."""
     result: list[tuple[list[Glyph], bool]] = []
+    max_width = max_width * WRAP_TOLERANCE + 0.5 if max_width else None
     for paragraph in text.replace("\r\n", "\n").split("\n"):
         words = paragraph.split(" ")
         current: list[Glyph] = []
@@ -503,13 +514,16 @@ def _layout(
     max_width: float | None,
     step: float,
     align: str,
+    wrap_width: float | None = None,
 ) -> list[PlacedLine]:
+    """Lay text out in a box ``max_width`` wide; lines wrap at ``wrap_width`` (default: the box)."""
     down = (-direction[1], direction[0])
     placed = []
-    for index, (glyphs, paragraph_end) in enumerate(_wrap(chain, text, style, max_width)):
+    lines = _wrap(chain, text, style, wrap_width or max_width)
+    for index, (glyphs, paragraph_end) in enumerate(lines):
         width = line_width(glyphs, style)
         extra = 0.0
-        if align == "justify" and max_width and not paragraph_end:
+        if align == "justify" and max_width and not paragraph_end and width < max_width:
             spaces = sum(1 for g in glyphs if g.char == " ")
             extra = (max_width - width) / spaces if spaces else 0.0
         shift = _align_offset(width, max_width, align)
@@ -536,12 +550,16 @@ def edit_block(doc: fitz.Document, page: fitz.Page, catalog: FontCatalog, edit: 
     plan = plan_fonts(doc, page, catalog, edit.style, first_span)
     style = _style(edit.style, first_span, plan, doc, page)
     step = _line_step(lines, direction, style.size, edit.line_height)
-    origin = _line_start(lines[0], direction)
+    origin = _block_start(lines, direction)
     if style.rise:
         origin = (origin[0] - direction[1] * style.rise, origin[1] + direction[0] * style.rise)
+    if edit.dx or edit.dy:
+        move = _display_delta(page, edit.dx, edit.dy)
+        origin = (origin[0] + move[0], origin[1] + move[1])
     block_rect = fitz.Rect(block["bbox"])
-    width = block_rect.width if abs(direction[0]) >= abs(direction[1]) else block_rect.height
-    placed = _layout(plan.chain, edit.text, style, origin, direction, width + 0.5, step, edit.align)
+    width = edit.width or (block_rect.width if abs(direction[0]) >= abs(direction[1]) else block_rect.height) + 0.5
+    wrap_width = max(edit.max_width, width) if edit.max_width else width
+    placed = _layout(plan.chain, edit.text, style, origin, direction, width, step, edit.align, wrap_width)
     redact_areas(page, [shrink_for_redaction(fitz.Rect(line["bbox"]), direction) for line in lines])
     if first_span.get("record") is not None:
         style = replace(style, **bind_resources(edit.style, first_span["record"], doc, page))
@@ -549,9 +567,17 @@ def edit_block(doc: fitz.Document, page: fitz.Page, catalog: FontCatalog, edit: 
     return _report(plan.chain)
 
 
-def _line_start(line: dict, direction: tuple[float, float]) -> tuple[float, float]:
-    span = line["spans"][0]
-    return (span["origin"][0], span["origin"][1])
+def _block_start(lines: list[dict], direction: tuple[float, float]) -> tuple[float, float]:
+    """Baseline origin of the first line, moved back to the block's leading edge.
+
+    The text box starts where the leftmost line starts (along the text direction),
+    so an indented first line does not indent every rewritten line.
+    """
+    first = lines[0]["spans"][0]["origin"]
+    along = [line["spans"][0]["origin"][0] * direction[0] + line["spans"][0]["origin"][1] * direction[1]
+             for line in lines]
+    back = min(along) - (first[0] * direction[0] + first[1] * direction[1])
+    return (first[0] + direction[0] * back, first[1] + direction[1] * back)
 
 
 def _line_step(lines: list[dict], direction: tuple[float, float], size: float, factor: float | None) -> float:
@@ -581,7 +607,9 @@ def add_text(doc: fitz.Document, page: fitz.Page, catalog: FontCatalog, item: Ne
     top_left = from_display_point(page, (item.x, item.y))
     down = (-direction[1], direction[0])
     origin = (top_left.x + down[0] * ascent, top_left.y + down[1] * ascent)
-    placed = _layout(plan.chain, item.text, style, origin, direction, item.width, style.size * item.line_height, item.align)
+    wrap_width = max(item.max_width, item.width or 0.0) if item.max_width else None
+    placed = _layout(plan.chain, item.text, style, origin, direction, item.width,
+                     style.size * item.line_height, item.align, wrap_width)
     write_lines(doc, page, placed, style, plan.chain)
     return _report(plan.chain)
 

@@ -45,6 +45,12 @@ class BlockEditBody(BaseModel):
     style: StyleBody = StyleBody()
     align: Literal["left", "center", "right", "justify"] = "left"
     line_height: float | None = Field(None, gt=0.3, le=5)
+    # Text box geometry (display space). ``width`` is the box the lines are aligned
+    # in; lines wrap at ``max_width`` when given (auto-width boxes), else at ``width``.
+    width: float | None = Field(None, gt=0, le=20000)
+    max_width: float | None = Field(None, gt=0, le=20000)
+    dx: float = Field(0, ge=-20000, le=20000)
+    dy: float = Field(0, ge=-20000, le=20000)
 
 
 class AddTextBody(BaseModel):
@@ -54,6 +60,7 @@ class AddTextBody(BaseModel):
     text: str = Field(min_length=1, max_length=50000)
     style: StyleBody = StyleBody(font="")
     width: float | None = Field(None, gt=0, le=20000)
+    max_width: float | None = Field(None, gt=0, le=20000)
     align: Literal["left", "center", "right", "justify"] = "left"
     line_height: float = Field(1.2, gt=0.3, le=5)
     rotation: Literal[0, 90, 180, 270] = 0
