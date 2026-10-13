@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { PageModel, Rect, Span, TextLine } from "../api/types";
-import { moveRect, pageObjects, resizeObject, textBoxes } from "./objects";
+import { moveRect, objectFromSelection, pageObjects, resizeObject, sameObject, selectionOf, textBoxes } from "./objects";
 
 function span(id: string, bbox: Rect, extra: Partial<Span> = {}): Span {
   return { id, text: id, bbox, origin: [bbox[0], bbox[3] - 2], size: 12, font: "Arial", color: "#000000", bold: false, italic: false, ...extra } as Span;
@@ -81,5 +81,16 @@ describe("resizeObject", () => {
 describe("moveRect", () => {
   it("is not limited by the page", () => {
     expect(moveRect([10, 10, 20, 20], -50, 900)).toEqual([-40, 910, -30, 920]);
+  });
+});
+
+describe("selection round trip", () => {
+  it("turns a page object into a selection and back", () => {
+    const [rule, image] = pageObjects(model);
+    for (const object of [rule, image]) {
+      const back = objectFromSelection(selectionOf(object, 3), 3);
+      expect(back && sameObject(back, object)).toBe(true);
+      expect(objectFromSelection(selectionOf(object, 3), 4)).toBeNull();
+    }
   });
 });

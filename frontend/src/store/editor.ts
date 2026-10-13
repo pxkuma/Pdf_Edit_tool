@@ -28,7 +28,8 @@ export type Tool =
 
 export type Selection =
   | { kind: "annotation"; page: number; xref: number }
-  | { kind: "image"; page: number; xref: number }
+  | { kind: "image"; page: number; xref: number; bbox?: Rect } // bbox: this placement of the image
+  | { kind: "graphic"; page: number; xref: number; bbox: Rect } // vector graphics (lines, boxes, rules)
   | { kind: "field"; page: number; xref: number }
   | null;
 

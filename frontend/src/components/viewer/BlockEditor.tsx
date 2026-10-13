@@ -1,4 +1,4 @@
-import { Check, MoveHorizontal, Pencil, X } from "lucide-react";
+import { Check, Copy, MoveHorizontal, Pencil, Trash2, X } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
 import { api } from "../../api/client";
 import type { Point, Rect } from "../../api/types";
@@ -177,6 +177,16 @@ export function BlockEditor({ docId, edit, zoom, obstacles, candidates, renderSr
     await run(() => api.deleteObjects(docId, { page, items }), "Text box deleted");
   };
 
+  const copyText = async () => {
+    try {
+      await navigator.clipboard.writeText(textRef.current);
+      useEditor.getState().toast("Text copied", "success");
+    } catch {
+      useEditor.getState().toast("Clipboard is not available in this browser context.", "warning");
+    }
+    frameRef.current?.focus({ preventScroll: true });
+  };
+
   /** Start typing; a box with mixed styles is edited run by run (keeps each run's style). */
   const startTyping = (at?: Point) => {
     if (edit.uniform !== false) {
@@ -262,6 +272,9 @@ export function BlockEditor({ docId, edit, zoom, obstacles, candidates, renderSr
       startTyping();
     } else if (e.key === "Escape") {
       void commit();
+    } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "c") {
+      e.preventDefault();
+      void copyText();
     }
   };
 
@@ -295,9 +308,17 @@ export function BlockEditor({ docId, edit, zoom, obstacles, candidates, renderSr
       <div className="edit-chip" style={{ left, top }} onPointerDown={(e) => e.stopPropagation()}>
         <span className="chip-label">Text box</span>
         {!typing && (
-          <button className="icon-btn small" onClick={() => startTyping()} title="Edit the text (double-click or Enter)">
-            <Pencil size={14} />
-          </button>
+          <>
+            <button className="icon-btn small" onClick={() => startTyping()} title="Edit the text (double-click or Enter)">
+              <Pencil size={14} />
+            </button>
+            <button className="icon-btn small" onClick={() => void copyText()} title="Copy the text">
+              <Copy size={14} />
+            </button>
+            <button className="icon-btn small" onClick={() => void remove()} title="Delete the text box (Delete)">
+              <Trash2 size={14} />
+            </button>
+          </>
         )}
         <button
           className={`icon-btn small${layout.auto ? " active" : ""}`}

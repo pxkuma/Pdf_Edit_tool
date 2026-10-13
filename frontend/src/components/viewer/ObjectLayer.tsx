@@ -1,8 +1,9 @@
 import { useEffect, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { api } from "../../api/client";
-import type { Annotation, PageImage, PageModel, Rect } from "../../api/types";
+import type { Annotation, PageModel, Rect } from "../../api/types";
 import { cssRect, resizeRect, translate, type Handle } from "../../lib/geometry";
 import { useEditor } from "../../store/editor";
+import { flushEdit } from "../../lib/editSession";
 import { startDrag } from "./usePointer";
 
 interface ObjectLayerProps {
@@ -35,14 +36,9 @@ export function ObjectLayer({ docId, page, model, zoom }: ObjectLayerProps) {
   useEffect(() => setPreview(null), [model]);
 
   const annotations = model?.annotations ?? [];
-  const images = (model?.images ?? []).filter((img) => img.editable);
 
   const commitAnnotation = async (annot: Annotation, rect: Rect) => {
     await run(() => api.updateAnnotation(docId, page, annot.xref, annotationStyle(annot), rect));
-  };
-
-  const commitImage = async (image: PageImage, rect: Rect) => {
-    await run(() => api.moveImage(docId, page, image.xref, rect));
   };
 
   const beginDrag = (
@@ -87,7 +83,10 @@ export function ObjectLayer({ docId, page, model, zoom }: ObjectLayerProps) {
         title={title}
         onPointerDown={(event) => {
           event.stopPropagation();
-          if (!selected) onSelect();
+          if (!selected) {
+            void flushEdit(); // apply a text box being edited before selecting this
+            onSelect();
+          }
           beginDrag(event, key, rect, null, onCommit); // press and drag moves it straight away
         }}
       >
@@ -106,16 +105,6 @@ export function ObjectLayer({ docId, page, model, zoom }: ObjectLayerProps) {
 
   return (
     <>
-      {images.map((image) =>
-        renderBox(
-          `img-${image.xref}-${image.bbox.join(",")}`,
-          image.bbox,
-          selection?.kind === "image" && selection.page === page && selection.xref === image.xref,
-          () => select({ kind: "image", page, xref: image.xref }),
-          (rect) => commitImage(image, rect),
-          "Image — drag to move, handles resize",
-        ),
-      )}
       {annotations.map((annot) =>
         renderBox(
           `an-${annot.xref}`,

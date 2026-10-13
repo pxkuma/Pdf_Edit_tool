@@ -87,3 +87,30 @@ export function resizeObject(rect: Rect, handle: Handle, dx: number, dy: number,
     handle.includes("n") ? rect[3] : rect[1] + nh,
   ];
 }
+
+type ObjectSelection =
+  | { kind: "image"; page: number; xref: number; bbox?: Rect }
+  | { kind: "graphic"; page: number; xref: number; bbox: Rect }
+  | { kind: string; page: number; xref: number }
+  | null;
+
+/** The selected image/graphic on ``page``, as a page object (null for anything else). */
+export function objectFromSelection(selection: ObjectSelection, page: number): PageObject | null {
+  if (!selection || selection.page !== page || !("bbox" in selection) || !selection.bbox) return null;
+  if (selection.kind === "graphic") return { key: "sel:graphic", kind: "drawing", bbox: selection.bbox, hit: grabbable(selection.bbox) };
+  if (selection.kind === "image") {
+    return { key: `sel:image:${selection.xref}`, kind: "image", bbox: selection.bbox, hit: grabbable(selection.bbox), xref: selection.xref };
+  }
+  return null;
+}
+
+export function selectionOf(object: PageObject, page: number) {
+  return object.kind === "image"
+    ? { kind: "image" as const, page, xref: object.xref ?? 0, bbox: object.bbox }
+    : { kind: "graphic" as const, page, xref: 0, bbox: object.bbox };
+}
+
+/** Same object (kind, image, place). */
+export function sameObject(a: PageObject, b: PageObject, tolerance = 1.5): boolean {
+  return a.kind === b.kind && (a.xref ?? 0) === (b.xref ?? 0) && a.bbox.every((v, i) => Math.abs(v - b.bbox[i]) <= tolerance);
+}

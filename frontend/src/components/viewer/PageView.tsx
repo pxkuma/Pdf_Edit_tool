@@ -69,7 +69,14 @@ export const PageView = memo(function PageView({ docId, info, zoom, visible, too
   const isMarkup = (MARKUP_TOOLS as readonly string[]).includes(tool);
   const layers = () => {
     if (!visible) return null;
-    if (tool === "editText") return <TextEditLayer docId={docId} page={info.index} model={model} zoom={zoom} pageSize={[info.width, info.height]} renderSrc={shown} />;
+    // Select and Edit text: every text box, image, graphic and annotation is an object.
+    const objectLayers = (
+      <>
+        <TextEditLayer docId={docId} page={info.index} model={model} zoom={zoom} pageSize={[info.width, info.height]} renderSrc={shown} />
+        <ObjectLayer docId={docId} page={info.index} model={model} zoom={zoom} />
+      </>
+    );
+    if (tool === "editText") return objectLayers;
     if (isMarkup) {
       return <WordSelectLayer docId={docId} page={info.index} model={model} zoom={zoom} markup={tool as MarkupTool} pageRef={ref} />;
     }
@@ -82,8 +89,7 @@ export const PageView = memo(function PageView({ docId, info, zoom, visible, too
     if (tool === "select") {
       return (
         <>
-          <WordSelectLayer docId={docId} page={info.index} model={model} zoom={zoom} markup={null} pageRef={ref} />
-          <ObjectLayer docId={docId} page={info.index} model={model} zoom={zoom} />
+          {objectLayers}
           <FormLayer docId={docId} model={model} zoom={zoom} />
         </>
       );

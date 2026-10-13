@@ -1,10 +1,20 @@
-import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import type { PageModel, Rect, TextBlock } from "../../api/types";
 import { api } from "../../api/client";
 import { useBackgrounds } from "../../lib/background";
 import { flushEdit, registerCommit } from "../../lib/editSession";
 import { cssRect, type Handle } from "../../lib/geometry";
-import { moveRect, pageObjects, resizeObject, textBoxes, type PageObject, type TextBox } from "../../lib/objects";
+import {
+  moveRect,
+  objectFromSelection,
+  pageObjects,
+  resizeObject,
+  sameObject,
+  selectionOf,
+  textBoxes,
+  type PageObject,
+  type TextBox,
+} from "../../lib/objects";
 import { pushCandidates } from "../../lib/push";
 import { SNAP_PX, snapBox, snapTargets, type Guides } from "../../lib/snap";
 import { textBoxLines } from "../../lib/textBox";
@@ -44,7 +54,11 @@ export function TextEditLayer({ docId, page, model, zoom, pageSize, renderSrc }:
   const blocks = model?.text.blocks ?? [];
   const boxes = useMemo(() => (model ? textBoxes(model) : []), [model]);
   const objects = useMemo(() => (model ? pageObjects(model) : []), [model]);
-  const [selected, setSelected] = useState<PageObject | null>(null);
+  // The selected image/graphic lives in the shared selection, so Properties can act on it.
+  const storeSelection = useEditor((s) => s.selection);
+  const select = useEditor((s) => s.select);
+  const selected = useMemo(() => objectFromSelection(storeSelection, page), [storeSelection, page]);
+  const setSelected = useCallback((object: PageObject | null) => select(object ? selectionOf(object, page) : null), [select, page]);
   const [preview, setPreview] = useState<Rect | null>(null);
   const [guides, setGuides] = useState<Guides>({});
   const nudgeTimer = useRef<number | undefined>(undefined);
@@ -111,7 +125,8 @@ export function TextEditLayer({ docId, page, model, zoom, pageSize, renderSrc }:
         pendingRect.current = null; // failed: show it where it really is
       } else {
         // It is there now: later moves start from the new place even before the page reloads.
-        setSelected((cur) => (cur && cur.key === object.key ? { ...cur, bbox: to, hit: to } : cur));
+        const current = objectFromSelection(useEditor.getState().selection, page);
+        if (current && sameObject(current, object)) setSelected({ ...current, bbox: to, hit: to });
       }
       setPreview(null);
     } finally {
@@ -234,7 +249,7 @@ export function TextEditLayer({ docId, page, model, zoom, pageSize, renderSrc }:
   return (
     <div className="layer" onPointerDown={onBackgroundDown}>
       {objects.map((object) =>
-        selected?.key === object.key ? null : (
+        selected && sameObject(selected, object) ? null : (
           <div
             key={object.key}
             className="obj-hit"

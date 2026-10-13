@@ -8,6 +8,7 @@ import { useEditor } from "../../store/editor";
 import { ColorPicker } from "../common/ColorPicker";
 import { NumberField } from "../common/NumberField";
 import { annotationStyle } from "../viewer/ObjectLayer";
+import { ObjectGeometry } from "./ObjectGeometry";
 
 function useSelectedObject() {
   const doc = useEditor((s) => s.doc);
@@ -42,6 +43,26 @@ export function SelectedObjectProps() {
   const { doc, selection, object } = useSelectedObject();
   const run = useEditor((s) => s.run);
   const select = useEditor((s) => s.select);
+  if (doc && selection?.kind === "graphic") {
+    return (
+      <div className="prop-section">
+        <h4>Graphic</h4>
+        <ObjectGeometry key={selection.bbox.join(",")} selection={selection} />
+        <button
+          className="btn small danger"
+          onClick={async () => {
+            select(null);
+            await run(() => api.deleteObjects(doc.id, { page: selection.page, items: [{ kind: "drawing", bbox: selection.bbox }] }), "Deleted");
+          }}
+        >
+          <Trash2 size={14} /> Delete
+        </button>
+        <p className="muted" style={{ margin: 0, fontSize: 12 }}>
+          Drag to move, drag the handles to resize (Shift keeps proportions). Arrow keys nudge, Delete removes.
+        </p>
+      </div>
+    );
+  }
   if (!doc || !selection || !object) return null;
 
   if (selection.kind === "image") {
@@ -62,6 +83,7 @@ export function SelectedObjectProps() {
         >
           <ImageUp size={14} /> Replace image…
         </button>
+        {selection.bbox && <ObjectGeometry key={selection.bbox.join(",")} selection={selection} />}
         <a className="btn small" href={api.imageUrl(doc.id, image.xref)} download>
           <Download size={14} /> Save image
         </a>
@@ -69,12 +91,21 @@ export function SelectedObjectProps() {
           className="btn small danger"
           onClick={async () => {
             select(null);
-            await run(() => api.deleteImage(doc.id, selection.page, image.xref), "Image deleted");
+            const bbox = selection.bbox;
+            await run(
+              () =>
+                bbox
+                  ? api.deleteObjects(doc.id, { page: selection.page, items: [{ kind: "image", bbox, xref: image.xref }] })
+                  : api.deleteImage(doc.id, selection.page, image.xref),
+              "Image deleted",
+            );
           }}
         >
           <Trash2 size={14} /> Delete image
         </button>
-        <p className="muted" style={{ margin: 0, fontSize: 12 }}>Drag to move, drag the handles to resize.</p>
+        <p className="muted" style={{ margin: 0, fontSize: 12 }}>
+          Drag to move, drag the handles to resize (corners keep proportions, Shift stretches). Arrow keys nudge, Delete removes.
+        </p>
       </div>
     );
   }

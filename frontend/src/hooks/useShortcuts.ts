@@ -17,7 +17,13 @@ async function deleteSelection(): Promise<void> {
   if (!doc || !selection) return;
   select(null);
   if (selection.kind === "annotation") await run(() => api.deleteAnnotation(doc.id, selection.page, selection.xref), "Deleted");
-  if (selection.kind === "image") await run(() => api.deleteImage(doc.id, selection.page, selection.xref), "Image deleted");
+  if (selection.kind === "image") {
+    const items = selection.bbox ? [{ kind: "image", bbox: selection.bbox, xref: selection.xref }] : null;
+    await run(() => (items ? api.deleteObjects(doc.id, { page: selection.page, items }) : api.deleteImage(doc.id, selection.page, selection.xref)), "Image deleted");
+  }
+  if (selection.kind === "graphic") {
+    await run(() => api.deleteObjects(doc.id, { page: selection.page, items: [{ kind: "drawing", bbox: selection.bbox }] }), "Deleted");
+  }
   if (selection.kind === "field") await run(() => api.deleteField(doc.id, selection.page, selection.xref), "Field deleted");
 }
 

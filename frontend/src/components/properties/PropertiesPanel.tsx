@@ -6,7 +6,7 @@ import { SelectedObjectProps } from "./ObjectProps";
 import { ActiveEditProps, NewTextProps } from "./TextProps";
 
 const HINTS: Partial<Record<Tool, string>> = {
-  select: "Select text to copy or mark it up. Click annotations or images to move, resize or style them. Fill form fields directly on the page.",
+  select: "Every text box, image, graphic and annotation is an object: drag to move it, click for resize handles, Delete removes it. Double-click text to type, Ctrl+C copies a selected text box. Fill form fields directly on the page.",
   pan: "Drag to scroll around the document.",
   editText: "Drag any text box, image or graphic to move it; click it to get resize handles. Double-click text to type in its original font. Delete removes the selected object.",
   whiteout: "Drag over an area to cover it with white and remove the text underneath.",
