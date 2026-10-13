@@ -49,6 +49,29 @@ class PushBody(BaseModel):
     items: list[PushItemBody] = Field(default_factory=list, max_length=5000)
 
 
+class TransformBody(BaseModel):
+    """Move/resize objects: everything inside ``from_rect`` maps onto ``to_rect``."""
+
+    page: int = Field(ge=0)
+    items: list[PushItemBody] = Field(min_length=1, max_length=5000)
+    from_rect: Rect
+    to_rect: Rect
+
+    @field_validator("from_rect", "to_rect")
+    @classmethod
+    def _positive(cls, rect: Rect) -> Rect:
+        if rect[2] - rect[0] < 0.5 or rect[3] - rect[1] < 0.1:
+            raise ValueError("Rectangle is too small.")
+        if any(abs(v) > 20000 for v in rect):
+            raise ValueError("Rectangle is out of range.")
+        return rect
+
+
+class DeleteObjectsBody(BaseModel):
+    page: int = Field(ge=0)
+    items: list[PushItemBody] = Field(min_length=1, max_length=5000)
+
+
 class BlockEditBody(BaseModel):
     page: int = Field(ge=0)
     bbox: Rect

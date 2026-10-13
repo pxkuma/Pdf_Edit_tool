@@ -62,6 +62,25 @@ def edit_block(doc_id: str, body: schemas.BlockEditBody) -> dict:
     return mutate(doc_id, "Edited paragraph", operation)
 
 
+@router.post("/objects/transform")
+def transform_objects(doc_id: str, body: schemas.TransformBody) -> dict:
+    src, dst = body.from_rect, body.to_rect
+    sx = (dst[2] - dst[0]) / (src[2] - src[0])
+    sy = (dst[3] - dst[1]) / (src[3] - src[1]) if src[3] - src[1] > 0.1 else 1.0
+    request = PushRequest(dst[1] - src[1], tuple(PushItem(i.kind, i.bbox, i.xref) for i in body.items),
+                          dx=dst[0] - src[0], scale=(sx, sy), anchor=(src[0], src[1]))
+    operation = single_page(body.page, lambda doc, page: asdict(textedit.transform_objects(doc, page, deps.catalog(), request)))
+    moved = any(abs(a - b) > 0.01 for a, b in zip((sx, sy), (1.0, 1.0)))
+    return mutate(doc_id, "Resized object" if moved else "Moved object", operation)
+
+
+@router.post("/objects/delete")
+def delete_objects(doc_id: str, body: schemas.DeleteObjectsBody) -> dict:
+    items = tuple(PushItem(i.kind, i.bbox, i.xref) for i in body.items)
+    operation = single_page(body.page, lambda doc, page: {"deleted": textedit.delete_objects(doc, page, items)})
+    return mutate(doc_id, "Deleted object", operation)
+
+
 @router.post("/text/add")
 def add_text(doc_id: str, body: schemas.AddTextBody) -> dict:
     item = NewText(body.x, body.y, body.text, _style(body.style, require_font=True), body.width,

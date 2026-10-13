@@ -641,24 +641,81 @@ def edit_block(doc: fitz.Document, page: fitz.Page, catalog: FontCatalog, edit: 
 def _plan_push(doc: fitz.Document, page: fitz.Page, catalog: FontCatalog, request: push.PushRequest | None,
                box_lines: list[dict], tagged: set[str], records: list) -> tuple[push.PushPlan | None, list[_WriteJob]]:
     """Content below the box to move, and the text jobs that rewrite its lines in their own fonts."""
-    if request is None or not request.items or abs(request.dy) < 0.01:
+    if request is None or not request.items or request.is_identity:
         return None, []
     lines = [line for block in extract.page_dict(page).get("blocks", []) if block.get("type", 0) == 0
              for line in block["lines"]]
     push_plan = push.plan(doc, page, request, lines, box_lines)
+    rules = decor.page_rules(page)
     jobs: list[_WriteJob] = []
     for line in push_plan.lines:
         direction = tuple(line.get("dir", (1.0, 0.0)))
         runs = extract.attach_records(doc, extract.line_runs(line, tagged), direction, records, tagged)
+        for run in runs:  # underline/strike lines travel with their text
+            found = decor.for_run(run, line["bbox"], direction, rules)
+            push_plan.paths += [p for p in found["underline"] + found["strike"]
+                                if not any(decor.same_path(p, q) for q in push_plan.paths)]
         line_jobs = _exact_jobs(doc, page, catalog, runs)
         if line_jobs is None:
             push_plan.copies.append(fitz.Rect(line["bbox"]))  # not rewritable exactly: copy it
             continue
         for job in line_jobs:
-            job.origin = (job.origin[0] + push_plan.delta.x, job.origin[1] + push_plan.delta.y)
+            moved = fitz.Point(job.origin) * push_plan.matrix
+            job.origin = (moved.x, moved.y)
             job.direction = direction
         jobs.extend(line_jobs)
     return push_plan, jobs
+
+
+def transform_objects(doc: fitz.Document, page: fitz.Page, catalog: FontCatalog,
+                      request: push.PushRequest) -> EditReport:
+    """Move/resize page objects as themselves (text in its own fonts, paths, images)."""
+    tagged = extract.tagged_font_names(page)
+    records = textstate.page_text_records(doc, page)
+    push_plan, jobs = _plan_push(doc, page, catalog, request, [], tagged, records)
+    if push_plan is None or not (push_plan.moved or push_plan.copies):
+        raise TextEditError("Nothing to move here.")
+    removal = [shrink_for_redaction(fitz.Rect(line["bbox"]), tuple(line.get("dir", (1.0, 0.0))))
+               for line in push_plan.lines]
+    if removal:
+        redact_areas(page, removal)
+    push.remove_graphics(page, push_plan, redact_areas)
+    push.place_graphics(page, push_plan)
+    for job in jobs:
+        _rebind(job, doc, page)
+        write_lines(doc, page, [PlacedLine(job.origin, job.direction, job.glyphs)], job.style, job.chain)
+    push.place_copies(page, push_plan)
+    return EditReport([], [], True, push_plan.moved, push_plan.skipped)
+
+
+def delete_objects(doc: fitz.Document, page: fitz.Page, items: tuple[push.PushItem, ...]) -> int:
+    """Remove page objects (text lines with their decorations, paths, images, fields)."""
+    lines = [line for block in extract.page_dict(page).get("blocks", []) if block.get("type", 0) == 0
+             for line in block["lines"]]
+    plan = push.plan(doc, page, push.PushRequest(0.0, items), lines, [])
+    rules = decor.page_rules(page)
+    tagged = extract.tagged_font_names(page)
+    for line in plan.lines:
+        direction = tuple(line.get("dir", (1.0, 0.0)))
+        for run in extract.line_runs(line, tagged):
+            found = decor.for_run(run, line["bbox"], direction, rules)
+            plan.paths += [p for p in found["underline"] + found["strike"]
+                           if not any(decor.same_path(p, q) for q in plan.paths)]
+    if not (plan.lines or plan.paths or plan.images or plan.widgets or plan.annots):
+        raise TextEditError("Nothing to delete here.")
+    if plan.lines:
+        redact_areas(page, [shrink_for_redaction(fitz.Rect(line["bbox"]), tuple(line.get("dir", (1.0, 0.0))))
+                            for line in plan.lines])
+    push.remove_graphics(page, plan, redact_areas)
+    # Put back only the paths the removal caught by accident.
+    push.place_graphics(page, replace(plan, paths=[], images=[], widgets=[], annots=[]))
+    for widget in list(page.widgets() or []):
+        if widget.xref in plan.widgets:
+            page.delete_widget(widget)
+    for annot in list(page.annots() or []):
+        if annot.xref in plan.annots:
+            page.delete_annot(annot)
+    return plan.moved
 
 
 def _exact_jobs(doc: fitz.Document, page: fitz.Page, catalog: FontCatalog, runs: list[dict]) -> list[_WriteJob] | None:

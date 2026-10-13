@@ -91,3 +91,31 @@ def current_pdf(client, doc_id: str) -> fitz.Document:
 def page_spans(client, doc_id: str, page: int = 0) -> list[dict]:
     model = client.get(f"/api/documents/{doc_id}/pages/{page}/model").json()["data"]
     return [s for b in model["text"]["blocks"] for line in b["lines"] for s in line["spans"]]
+
+
+TITLE_Y = 100
+
+
+def make_push_pdf() -> bytes:
+    doc = fitz.open()
+    page = doc.new_page()
+    page.insert_font(fontname="F1", fontfile=find_font("LiberationSans-Regular.ttf"))
+    page.insert_font(fontname="F2", fontfile=find_font("LiberationSerif-Regular.ttf"))
+    page.insert_text((72, TITLE_Y), "Short title", fontname="F1", fontsize=14)
+    page.insert_text((72, 140), "Paragraph line one below the title", fontname="F2", fontsize=12)
+    page.insert_text((72, 155), "Paragraph line two", fontname="F2", fontsize=12, color=(0.7, 0, 0))
+    page.draw_line((72, 168), (540, 168), color=(0.4, 0.4, 0.4), width=1.5, dashes="[3 2] 0")
+    page.draw_rect(fitz.Rect(72, 180, 300, 220), color=(0, 0, 0.6), fill=(0.85, 0.9, 1), width=1, fill_opacity=0.8)
+    page.insert_text((80, 204), "Inside a box", fontname="F1", fontsize=11)
+    pix = fitz.Pixmap(fitz.csRGB, fitz.IRect(0, 0, 40, 30), 0)
+    pix.set_rect(pix.irect, (200, 50, 50))
+    page.insert_image(fitz.Rect(320, 180, 400, 240), pixmap=pix)
+    page.insert_text((72, 820), "Footer stays", fontname="F1", fontsize=9)
+    return doc.tobytes()
+
+
+@pytest.fixture()
+def pdoc(client):
+    response = client.post("/api/documents", files={"file": ("push.pdf", make_push_pdf(), "application/pdf")})
+    assert response.status_code == 200, response.text
+    return response.json()["data"]

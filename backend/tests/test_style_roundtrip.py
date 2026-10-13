@@ -7,7 +7,6 @@ it, not draw it a second time.
 from __future__ import annotations
 
 import pytest
-
 from conftest import current_pdf, page_spans
 
 

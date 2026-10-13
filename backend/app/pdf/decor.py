@@ -59,7 +59,7 @@ def for_run(run: dict, line_bbox: tuple, direction: tuple, rules: list[dict]) ->
     return found
 
 
-def _same(a: dict, b: dict) -> bool:
+def same_path(a: dict, b: dict) -> bool:
     return tuple(a["rect"]) == tuple(b["rect"]) and a.get("color") == b.get("color") and a.get("type") == b.get("type")
 
 
@@ -69,7 +69,7 @@ def erase(page: fitz.Page, paths: list[dict], redact: Callable) -> None:
         return
     removal = [push.removal_rect(p) for p in paths]
     keep = [p for p in page.get_drawings()
-            if not any(_same(p, q) for q in paths)
+            if not any(same_path(p, q) for q in paths)
             and any(push.inside(push.path_rect(p), r + (push.PAD, push.PAD, -push.PAD, -push.PAD)) for r in removal)]
     redact(page, removal, graphics=fitz.PDF_REDACT_LINE_ART_REMOVE_IF_COVERED, text=fitz.PDF_REDACT_TEXT_NONE)
     if keep:

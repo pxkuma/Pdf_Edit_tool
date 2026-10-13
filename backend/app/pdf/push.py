@@ -36,13 +36,30 @@ class PushItem:
 
 @dataclass(frozen=True)
 class PushRequest:
-    dy: float  # display space, positive = down
+    """Move (and optionally scale) items, in display space.
+
+    A point p goes to ``anchor + (p - anchor) * scale + (dx, dy)``.
+    """
+
+    dy: float  # positive = down
     items: tuple[PushItem, ...]
+    dx: float = 0.0
+    scale: tuple[float, float] = (1.0, 1.0)
+    anchor: tuple[float, float] = (0.0, 0.0)
+
+    def display_matrix(self) -> fitz.Matrix:
+        ax, ay = self.anchor
+        sx, sy = self.scale
+        return fitz.Matrix(1, 0, 0, 1, -ax, -ay) * fitz.Matrix(sx, 0, 0, sy, 0, 0) * fitz.Matrix(1, 0, 0, 1, ax + self.dx, ay + self.dy)
+
+    @property
+    def is_identity(self) -> bool:
+        return abs(self.dx) < 0.01 and abs(self.dy) < 0.01 and abs(self.scale[0] - 1) < 1e-4 and abs(self.scale[1] - 1) < 1e-4
 
 
 @dataclass
 class PushPlan:
-    delta: fitz.Point  # unrotated page space
+    matrix: fitz.Matrix  # unrotated page space
     lines: list[dict] = field(default_factory=list)  # text lines to rewrite
     paths: list[dict] = field(default_factory=list)  # drawings to redraw shifted
     keep_paths: list[dict] = field(default_factory=list)  # removed as collateral: redraw in place
@@ -123,10 +140,7 @@ def _centre_in(rect: fitz.Rect, area: fitz.Rect) -> bool:
 def plan(doc: fitz.Document, page: fitz.Page, request: PushRequest, text_lines: list[dict],
          exclude_lines: list[dict]) -> PushPlan:
     """Work out what moves. ``text_lines`` are the page's lines (from ``extract``)."""
-    a = page.derotation_matrix
-    origin = fitz.Point(0, 0) * a
-    delta = fitz.Point(0, request.dy) * a - origin
-    result = PushPlan(fitz.Point(delta.x, delta.y))
+    result = PushPlan(page.rotation_matrix * request.display_matrix() * page.derotation_matrix)
     by_kind: dict[str, list[PushItem]] = {}
     for item in request.items:
         by_kind.setdefault(item.kind, []).append(item)
@@ -215,7 +229,7 @@ def remove_graphics(page: fitz.Page, push_plan: PushPlan, redact) -> None:
 
 def place_graphics(page: fitz.Page, push_plan: PushPlan) -> None:
     """Redraw paths, re-place images and move fields/annotations (before text is written)."""
-    shift = fitz.Matrix(1, 0, 0, 1, push_plan.delta.x, push_plan.delta.y)
+    shift = push_plan.matrix
     if push_plan.paths or push_plan.keep_paths:
         shape = page.new_shape()
         for path in push_plan.keep_paths:
@@ -239,7 +253,7 @@ def place_copies(page: fitz.Page, push_plan: PushPlan) -> None:
     """Lines whose fonts cannot be rewritten exactly: copy them from the snapshot."""
     if not push_plan.copies or push_plan.snapshot is None:
         return
-    shift = fitz.Matrix(1, 0, 0, 1, push_plan.delta.x, push_plan.delta.y)
+    shift = push_plan.matrix
     for rect in push_plan.copies:
         clip = rect + (-0.5, -0.5, 0.5, 0.5)
         page.show_pdf_page(clip * shift, push_plan.snapshot, 0, clip=clip)
