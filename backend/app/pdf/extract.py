@@ -253,3 +253,31 @@ def find_block(page: fitz.Page, bbox: tuple) -> dict | None:
         if best is None or score < best[0]:
             best = (score, block)
     return best[1] if best and best[0] < 0.5 else None
+
+
+def find_box_lines(page: fitz.Page, bbox: tuple) -> tuple[dict, list[dict]] | None:
+    """The block containing a text box and the lines of it inside the box.
+
+    A text box may cover only part of a block: MuPDF often groups a label and its
+    value (or the cells of a table row) on one baseline into a single block.
+    """
+    target = fitz.Rect(bbox) * page.derotation_matrix
+    target.normalize()
+    area = abs(target) or 1.0
+    grown = target + (-1.5, -1.5, 1.5, 1.5)
+    best: tuple[float, dict, list[dict]] | None = None
+    for block in page_dict(page).get("blocks", []):
+        if block.get("type", 0) != 0 or not block.get("lines"):
+            continue
+        covered = abs(fitz.Rect(block["bbox"]) & target) / area
+        if covered < 0.5 or (best is not None and covered <= best[0]):
+            continue
+        lines = []
+        for line in block["lines"]:
+            rect = fitz.Rect(line["bbox"])
+            centre = fitz.Point((rect.x0 + rect.x1) / 2, (rect.y0 + rect.y1) / 2)
+            if centre in grown:
+                lines.append(line)
+        if lines:
+            best = (covered, block, lines)
+    return (best[1], best[2]) if best else None

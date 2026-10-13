@@ -126,7 +126,18 @@ export const api = {
   ): Mut<EditReport> => request("POST", `${doc(id)}/text/span`, body),
   editBlock: (
     id: string,
-    body: { page: number; bbox: Rect; text: string; style: Partial<TextStyle>; align: string; line_height?: number | null },
+    body: {
+      page: number;
+      bbox: Rect;
+      text: string;
+      style: Partial<TextStyle>;
+      align: string;
+      line_height?: number | null;
+      width?: number | null;
+      max_width?: number | null;
+      dx?: number;
+      dy?: number;
+    },
   ): Mut<EditReport> => request("POST", `${doc(id)}/text/block`, body),
   addText: (
     id: string,
@@ -137,6 +148,7 @@ export const api = {
       text: string;
       style: Partial<TextStyle>;
       width?: number | null;
+      max_width?: number | null;
       align: string;
       line_height: number;
       rotation: number;

@@ -252,3 +252,51 @@ def test_add_text_auto_width_never_wraps(client, doc):
 def _any_face(client):
     families = client.get("/api/fonts").json()["data"]["families"]
     return families[0]["faces"][0]["id"]
+
+
+def _form_doc(client):
+    import pymupdf as fitz
+    from conftest import find_font
+
+    pdf = fitz.open()
+    page = pdf.new_page()
+    page.insert_font(fontname="F1", fontfile=find_font("LiberationSans-Regular.ttf"))
+    page.insert_text((72, 100), "Name:", fontname="F1", fontsize=12)
+    page.insert_text((120, 100), "Ravi", fontname="F1", fontsize=12)
+    page.insert_text((72, 160), "Item", fontname="F1", fontsize=12)
+    page.insert_text((360, 160), "Amount", fontname="F1", fontsize=12)
+    response = client.post("/api/documents", files={"file": ("form.pdf", pdf.tobytes(), "application/pdf")})
+    assert response.status_code == 200, response.text
+    return response.json()["data"]
+
+
+def _line(client, doc_id, needle):
+    model = client.get(f"/api/documents/{doc_id}/pages/0/model").json()["data"]
+    return next(line for b in model["text"]["blocks"] for line in b["lines"] if any(needle in s["text"] for s in line["spans"]))
+
+
+def test_text_box_edits_only_its_lines_of_a_shared_block(client):
+    """Label and value on one baseline may share a block: editing the value keeps the label."""
+    form = _form_doc(client)
+    value = _line(client, form["id"], "Ravi")
+    response = client.post(f"/api/documents/{form['id']}/text/block", json={
+        "page": 0, "bbox": value["bbox"], "text": "Ravi Shankar Prasad Srivastava", "align": "left",
+        "width": 300, "max_width": 400})
+    assert response.status_code == 200, response.text
+    label = _line(client, form["id"], "Name:")
+    name = _line(client, form["id"], "Srivastava")
+    assert abs(label["bbox"][0] - 72) < 1
+    assert abs(name["spans"][0]["origin"][0] - 120) < 1.5
+    assert abs(name["spans"][0]["origin"][1] - 100) < 0.6
+    assert "Name:" not in "".join(s["text"] for s in name["spans"])
+
+
+def test_text_box_on_a_row_does_not_stack_other_columns(client):
+    form = _form_doc(client)
+    item = _line(client, form["id"], "Item")
+    response = client.post(f"/api/documents/{form['id']}/text/block", json={
+        "page": 0, "bbox": item["bbox"], "text": "Item description", "align": "left", "width": 200})
+    assert response.status_code == 200, response.text
+    amount = _line(client, form["id"], "Amount")
+    assert abs(amount["bbox"][0] - 360) < 1
+    assert abs(amount["spans"][0]["origin"][1] - 160) < 0.6

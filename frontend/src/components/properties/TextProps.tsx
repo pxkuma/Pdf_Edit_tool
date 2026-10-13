@@ -99,14 +99,14 @@ function DetectedStyle() {
 export function ActiveEditProps() {
   const edit = useEditor((s) => s.activeEdit);
   const patchDraft = useEditor((s) => s.patchDraft);
-  const setActiveEdit = useEditor((s) => s.setActiveEdit);
+  const patchEdit = useEditor((s) => s.patchEdit);
   if (!edit) return null;
   const { draft, span } = edit;
 
   return (
     <>
       <div className="prop-section">
-        <h4>{edit.mode === "block" ? "Paragraph" : "Text"}</h4>
+        <h4>{edit.mode === "block" ? "Text box" : "Text"}</h4>
         <DetectedStyle />
         {span.ocr && edit.mode === "span" && (
           <div className="field">
@@ -159,9 +159,39 @@ export function ActiveEditProps() {
       {edit.mode === "block" ? (
         <div className="prop-section">
           <h4>Layout</h4>
-          <AlignControl value={edit.align} onChange={(align) => setActiveEdit({ ...edit, align })} />
+          <AlignControl value={edit.align} onChange={(align) => patchEdit({ align })} />
+          <label className="field">
+            <span>Line spacing</span>
+            <NumberField
+              value={edit.lineHeight ?? null}
+              placeholder="original"
+              min={0.6}
+              max={4}
+              step={0.1}
+              suffix="×"
+              onChange={(lineHeight) => patchEdit({ lineHeight })}
+              label="Line spacing"
+            />
+          </label>
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={(edit.box?.width ?? null) === null}
+              onChange={(e) =>
+                patchEdit({
+                  box: {
+                    dx: edit.box?.dx ?? 0,
+                    dy: edit.box?.dy ?? 0,
+                    width: e.target.checked ? null : (edit.blockBbox ?? span.bbox)[2] - (edit.blockBbox ?? span.bbox)[0],
+                  },
+                })
+              }
+            />
+            Auto width: use free space before wrapping
+          </label>
           <p className="muted" style={{ margin: 0, fontSize: 12 }}>
-            The paragraph reflows inside its original box. Press Ctrl+Enter to apply.
+            Drag the border to move. Side handles set the width and the text wraps inside it.
+            Corner handles resize the text. Ctrl+Enter applies, Esc cancels.
           </p>
         </div>
       ) : (

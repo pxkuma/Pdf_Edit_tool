@@ -1,4 +1,4 @@
-import { Check, Move, Pilcrow, X } from "lucide-react";
+import { Check, Move, TextSelect, X } from "lucide-react";
 import {
   useCallback,
   useEffect,
@@ -13,7 +13,7 @@ import type { TextBlock } from "../../api/types";
 import { registerCommit } from "../../lib/editSession";
 import { cssFamily, ensureFace } from "../../lib/fonts";
 import { useEditor, type ActiveEdit } from "../../store/editor";
-import { beginBlockEdit, draftChanged, previewFace, reportEdit, styleFromDraft } from "./editHelpers";
+import { beginBlockEdit, blockText, draftChanged, previewFace, reportEdit, styleFromDraft } from "./editHelpers";
 import { startDrag } from "./usePointer";
 
 interface SpanEditorProps {
@@ -94,9 +94,13 @@ export function SpanEditor({ docId, edit, zoom, block }: SpanEditorProps) {
     setActiveEdit(null);
   };
 
-  const toParagraph = () => {
+  const toTextBox = () => {
     if (!block) return;
-    const next = beginBlockEdit(page, block);
+    // Carry over what was typed so far into the block's text.
+    const typed = state.current.text;
+    const base = blockText(block);
+    const text = typed !== span.text && base.includes(span.text) ? base.replace(span.text, typed) : base;
+    const next = beginBlockEdit(page, block, text);
     registerCommit(null);
     setActiveEdit(next);
   };
@@ -150,9 +154,9 @@ export function SpanEditor({ docId, edit, zoom, block }: SpanEditorProps) {
         <button className="icon-btn small" onClick={cancel} title="Cancel (Esc)">
           <X size={14} />
         </button>
-        {block && block.lines.length > 1 && (
-          <button className="icon-btn small" onClick={toParagraph} title="Edit whole paragraph (reflow)">
-            <Pilcrow size={14} />
+        {block && !span.ocr && (
+          <button className="icon-btn small" onClick={toTextBox} title="Edit as a text box (move, resize, wrap lines)">
+            <TextSelect size={14} />
           </button>
         )}
       </div>

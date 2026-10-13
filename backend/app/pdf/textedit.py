@@ -536,10 +536,11 @@ def _layout(
 
 
 def edit_block(doc: fitz.Document, page: fitz.Page, catalog: FontCatalog, edit: BlockEdit) -> EditReport:
-    block = extract.find_block(page, edit.bbox)
-    if block is None:
+    found = extract.find_box_lines(page, edit.bbox)
+    if found is None:
         raise TextEditError("The paragraph could not be found on the page any more.")
-    lines = [line for line in block["lines"] if any(s["text"].strip() for s in line["spans"])]
+    _block, box_lines = found
+    lines = [line for line in box_lines if any(s["text"].strip() for s in line["spans"])]
     if not lines:
         raise TextEditError("The paragraph contains no editable text.")
     direction = tuple(lines[0].get("dir", (1.0, 0.0)))
@@ -556,7 +557,9 @@ def edit_block(doc: fitz.Document, page: fitz.Page, catalog: FontCatalog, edit: 
     if edit.dx or edit.dy:
         move = _display_delta(page, edit.dx, edit.dy)
         origin = (origin[0] + move[0], origin[1] + move[1])
-    block_rect = fitz.Rect(block["bbox"])
+    block_rect = fitz.Rect(lines[0]["bbox"])
+    for line in lines[1:]:
+        block_rect |= fitz.Rect(line["bbox"])
     width = edit.width or (block_rect.width if abs(direction[0]) >= abs(direction[1]) else block_rect.height) + 0.5
     wrap_width = max(edit.max_width, width) if edit.max_width else width
     placed = _layout(plan.chain, edit.text, style, origin, direction, width, step, edit.align, wrap_width)

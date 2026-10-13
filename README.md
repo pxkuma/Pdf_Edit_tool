@@ -46,9 +46,19 @@ Only the properties you change are overridden. The Properties panel lists what w
 
 Scanned pages are detected automatically. **Run OCR** (Edit → OCR, or the banner above a scanned page) recognises the text with Tesseract and places an invisible text layer exactly over the scanned words. The page looks the same, but its text can be searched, selected, copied and edited. Editing a recognised word replaces it in the image: the background colour is painted over the old word and the new word is drawn at the same baseline and size, in the sampled ink colour (bold is detected too). If you prefer, you can correct only the hidden OCR text. The Docker image includes English, Hindi, German, French, Spanish, Italian and Portuguese; add more `tesseract-ocr-<lang>` packages in the `Dockerfile`.
 
+### Text boxes
+
+Double-click text (or use the text-box button while editing a word) to edit it as a box. Text you add with **Add text** works the same way.
+
+- **Auto width (default):** the box keeps its size for shorter text and grows into the free space beside it for longer text. A longer name stays on one line while there is room, and it only wraps where the next text or the page margin begins. Right-aligned text grows to the left, centred text grows both ways.
+- **Side handles** set a fixed width and the text wraps inside it. Double-click a side handle (or the ↔ button) to go back to auto width.
+- **Corner handles** resize the text: font size and box scale together.
+- **Drag the border** to move the box. Alignment and line spacing are in Properties.
+- A label and its value, or the cells of a table row, are separate boxes even when the PDF stores them together, so editing one never pushes the others onto new lines.
+
 ## Features
 
-- **Edit:** click any text to edit it in place, or double-click to rewrite a whole paragraph with automatic wrapping and alignment. You can change the font, size, color, bold/italic/underline/strike, opacity, letter spacing and width scale, and move text around. You can also add new text in any installed font, any font already in the document, or a font you upload (.ttf/.otf). Find & replace keeps the original fonts.
+- **Edit:** click any text to edit it in place, or double-click to edit it as a **text box** (see below). You can change the font, size, color, bold/italic/underline/strike, opacity, letter spacing and width scale, and move text around. You can also add new text in any installed font, any font already in the document, or a font you upload (.ttf/.otf). Find & replace keeps the original fonts.
 - **Annotate:** highlight, underline, strikeout, squiggly, freehand drawing, rectangles, ellipses, lines, arrows, sticky notes, text-box comments and stamps. You can select, move, resize and restyle any of them.
 - **Fill & sign:** fill existing form fields directly on the page. You can also add text fields and checkboxes, and insert drawn, typed or uploaded signatures (saved per browser), dates and check marks. Forms can be flattened.
 - **Pages:** thumbnails with drag-and-drop reordering and multi-select. Rotate, insert blank pages, merge PDFs or images, duplicate, delete, crop/uncrop, extract and split.

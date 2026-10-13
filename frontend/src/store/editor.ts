@@ -85,12 +85,26 @@ export interface SpanDraft {
   ocrMode: "replace" | "hidden";
 }
 
+/** Geometry of a text box being edited, relative to its original block (points). */
+export interface BoxDraft {
+  dx: number;
+  dy: number;
+  width: number | null; // null = auto width (grow into free space, then wrap)
+}
+
+export const AUTO_BOX: BoxDraft = { dx: 0, dy: 0, width: null };
+
 export interface ActiveEdit {
   mode: "span" | "block";
   page: number;
   span: Span;
+  blockId?: string;
+  boxSpanIds?: string[]; // spans replaced by the text box
   blockBbox?: Rect;
   blockText?: string;
+  lineStep?: number; // original baseline distance (pt) at the span's size
+  lineHeight?: number | null; // multiple of the font size; null = original spacing
+  box?: BoxDraft;
   draft: SpanDraft;
   align: "left" | "center" | "right" | "justify";
 }
@@ -152,6 +166,7 @@ interface EditorActions {
   setRedactColor: (color: string) => void;
   setActiveEdit: (edit: ActiveEdit | null) => void;
   patchDraft: (patch: Partial<SpanDraft>) => void;
+  patchEdit: (patch: Partial<ActiveEdit>) => void;
   setPlacement: (placement: Placement | null) => void;
   setSearch: (hits: SearchHit[], active?: number) => void;
   setActiveHit: (index: number) => void;
@@ -293,6 +308,7 @@ export const useEditor = create<EditorState & EditorActions>((set, get) => {
       set((state) =>
         state.activeEdit ? { activeEdit: { ...state.activeEdit, draft: { ...state.activeEdit.draft, ...patch } } } : {},
       ),
+    patchEdit: (patch) => set((state) => (state.activeEdit ? { activeEdit: { ...state.activeEdit, ...patch } } : {})),
     setPlacement: (placement) =>
       set((state) => {
         if (state.placement && state.placement.url !== placement?.url) URL.revokeObjectURL(state.placement.url);

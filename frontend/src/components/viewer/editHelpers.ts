@@ -1,7 +1,7 @@
 import type { EditReport, Span, TextBlock, TextStyle } from "../../api/types";
 import { ensureFace, findFace, useFonts, variantOf } from "../../lib/fonts";
 import type { ActiveEdit, SpanDraft } from "../../store/editor";
-import { useEditor } from "../../store/editor";
+import { AUTO_BOX, useEditor } from "../../store/editor";
 
 export function draftFromSpan(span: Span): SpanDraft {
   return {
@@ -71,7 +71,18 @@ export function beginSpanEdit(page: number, span: Span): ActiveEdit {
   return edit;
 }
 
-export function beginBlockEdit(page: number, block: TextBlock): ActiveEdit | null {
+/** Median distance between the baselines of a block's lines (points). */
+export function lineStep(block: TextBlock, size: number): number {
+  const baselines = block.lines.filter((l) => l.spans.length).map((l) => l.spans[0].origin[1]);
+  const deltas = baselines
+    .slice(1)
+    .map((y, i) => y - baselines[i])
+    .filter((d) => d > size * 0.5)
+    .sort((a, b) => a - b);
+  return deltas.length ? deltas[Math.floor(deltas.length / 2)] : size * 1.2;
+}
+
+export function beginBlockEdit(page: number, block: TextBlock, text?: string): ActiveEdit | null {
   const spans = block.lines.flatMap((l) => l.spans);
   if (!spans.length) return null;
   const main = spans.reduce((a, b) => (b.text.length > a.text.length ? b : a));
@@ -80,8 +91,13 @@ export function beginBlockEdit(page: number, block: TextBlock): ActiveEdit | nul
     mode: "block",
     page,
     span: main,
+    blockId: block.id,
+    boxSpanIds: spans.map((s) => s.id),
     blockBbox: block.bbox,
-    blockText: blockText(block),
+    blockText: text ?? blockText(block),
+    lineStep: lineStep(block, main.size),
+    lineHeight: null,
+    box: AUTO_BOX,
     draft: draftFromSpan(main),
     align: "left",
   };

@@ -151,15 +151,63 @@
   line-height: 1;
 }
 
-.block-editor,
-.text-box-editor {
+/* Movable, resizable text box (paragraph edit and new text) */
+.tbox {
   position: absolute;
   z-index: 20;
+  outline: 1px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.tbox.auto {
+  outline-style: dashed;
+}
+
+.tbox-move {
+  position: absolute;
+  inset: -8px;
+  border: 6px solid transparent;
+  cursor: move;
+}
+
+.tbox-handle {
+  position: absolute;
+  z-index: 2;
+  background: #fff;
+  border: 1px solid var(--accent);
+}
+
+.tbox-handle.side {
+  top: 50%;
+  width: 6px;
+  height: 16px;
+  margin-top: -8px;
+  border-radius: 3px;
+  cursor: ew-resize;
+}
+
+.tbox-handle.side.w { left: -6px; }
+.tbox-handle.side.e { right: -6px; }
+
+.tbox-handle.corner {
+  width: 8px;
+  height: 8px;
+  bottom: -7px;
+}
+
+.tbox-handle.corner.sw { left: -7px; cursor: nesw-resize; }
+.tbox-handle.corner.se { right: -7px; cursor: nwse-resize; }
+
+.block-editor,
+.text-box-editor {
+  position: relative;
+  z-index: 1;
+  display: block;
+  width: 100%;
   margin: 0;
   padding: 0;
   border: 0;
-  outline: 1px solid var(--accent);
-  outline-offset: 2px;
+  outline: 0;
   background: #fff;
   resize: none;
   overflow: hidden;
@@ -167,7 +215,11 @@
 
 .text-box-editor {
   background: rgb(255 255 255 / 0.7);
-  min-width: 40px;
+  white-space: pre;
+}
+
+.text-box-editor[wrap="soft"] {
+  white-space: pre-wrap;
 }
 
 .edit-chip {

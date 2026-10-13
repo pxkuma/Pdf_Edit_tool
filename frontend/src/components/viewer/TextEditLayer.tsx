@@ -2,6 +2,7 @@ import { useMemo, useRef } from "react";
 import type { PageModel, Span, TextBlock } from "../../api/types";
 import { flushEdit } from "../../lib/editSession";
 import { cssRect } from "../../lib/geometry";
+import { textBoxLines } from "../../lib/textBox";
 import { useEditor } from "../../store/editor";
 import { BlockEditor } from "./BlockEditor";
 import { beginBlockEdit, beginSpanEdit } from "./editHelpers";
@@ -12,18 +13,34 @@ interface TextEditLayerProps {
   page: number;
   model: PageModel | null;
   zoom: number;
+  pageWidth: number;
 }
 
-export function TextEditLayer({ docId, page, model, zoom }: TextEditLayerProps) {
+export function TextEditLayer({ docId, page, model, zoom, pageWidth }: TextEditLayerProps) {
   const activeEdit = useEditor((s) => (s.activeEdit?.page === page ? s.activeEdit : null));
   const setActiveEdit = useEditor((s) => s.setActiveEdit);
   const blocks = model?.text.blocks ?? [];
 
+  // The text box a span belongs to: its paragraph lines, never other columns of a row.
   const blockOf = useMemo(() => {
     const map = new Map<string, TextBlock>();
-    for (const block of blocks) for (const line of block.lines) for (const span of line.spans) map.set(span.id, block);
+    for (const block of blocks) {
+      for (const line of block.lines) {
+        const box = textBoxLines(block, line.id);
+        for (const span of line.spans) map.set(span.id, box);
+      }
+    }
     return map;
   }, [blocks]);
+
+  const editingSpans = useMemo(() => new Set(activeEdit?.boxSpanIds ?? []), [activeEdit?.boxSpanIds]);
+  const obstacles = useMemo(
+    () =>
+      blocks.flatMap((block) =>
+        block.lines.filter((line) => !line.spans.some((s) => editingSpans.has(s.id))).map((line) => ({ id: line.id, bbox: line.bbox })),
+      ),
+    [blocks, editingSpans],
+  );
 
   const startSpan = async (span: Span) => {
     await flushEdit();
@@ -59,14 +76,14 @@ export function TextEditLayer({ docId, page, model, zoom }: TextEditLayerProps) 
       {blocks.flatMap((block) =>
         block.lines.flatMap((line) =>
           line.spans.map((span) => {
-            const hidden = span.id === editingId || (editingBlock && blockOf.get(span.id)?.bbox === editingBlock);
+            const hidden = span.id === editingId || editingSpans.has(span.id);
             if (hidden) return null;
             return (
               <div
                 key={span.id}
                 className={span.ocr ? "run ocr" : "run"}
                 style={cssRect(span.bbox, zoom)}
-                title={span.ocr ? "Scanned text (OCR) — click to edit" : `${span.font} · ${span.size} pt — click to edit, double-click for paragraph`}
+                title={span.ocr ? "Scanned text (OCR) — click to edit" : `${span.font} · ${span.size} pt — click to edit, double-click for a text box`}
                 onPointerDown={(e) => e.stopPropagation()}
                 onClick={(e) => onRunClick(span, e.detail)}
               />
@@ -82,7 +99,9 @@ export function TextEditLayer({ docId, page, model, zoom }: TextEditLayerProps) 
       {activeEdit?.mode === "span" && (
         <SpanEditor key={activeEdit.span.id} docId={docId} edit={activeEdit} zoom={zoom} block={blockOf.get(activeEdit.span.id) ?? null} />
       )}
-      {activeEdit?.mode === "block" && <BlockEditor key={`blk-${activeEdit.span.id}`} docId={docId} edit={activeEdit} zoom={zoom} />}
+      {activeEdit?.mode === "block" && (
+        <BlockEditor key={`blk-${activeEdit.span.id}`} docId={docId} edit={activeEdit} zoom={zoom} obstacles={obstacles} pageWidth={pageWidth} />
+      )}
     </div>
   );
 }

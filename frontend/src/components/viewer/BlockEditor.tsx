@@ -1,20 +1,35 @@
-import { Check, X } from "lucide-react";
+import { Check, MoveHorizontal, X } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { api } from "../../api/client";
+import type { Rect } from "../../api/types";
 import { registerCommit } from "../../lib/editSession";
 import { cssFamily, ensureFace } from "../../lib/fonts";
-import { useEditor, type ActiveEdit } from "../../store/editor";
+import { autoBox, freeSpan, naturalWidth, scaleBox, widenBox, type HBox } from "../../lib/textBox";
+import { AUTO_BOX, useEditor, type ActiveEdit } from "../../store/editor";
 import { draftChanged, previewFace, reportEdit, styleFromDraft } from "./editHelpers";
+import { TextBoxFrame, type BoxGesture } from "./TextBoxFrame";
 
 interface BlockEditorProps {
   docId: string;
   edit: ActiveEdit;
   zoom: number;
+  obstacles: { id: string; bbox: Rect }[]; // other text on the page
+  pageWidth: number;
 }
 
-export function BlockEditor({ docId, edit, zoom }: BlockEditorProps) {
+interface BoxLayout {
+  box: HBox;
+  maxWidth: number; // where lines wrap
+  auto: boolean;
+}
+
+const round2 = (value: number) => Math.round(value * 100) / 100;
+
+/** Edit a whole text block as a movable, resizable text box. */
+export function BlockEditor({ docId, edit, zoom, obstacles, pageWidth }: BlockEditorProps) {
   const { span, draft, page } = edit;
-  const bbox = edit.blockBbox ?? span.bbox;
+  const original = edit.blockBbox ?? span.bbox;
+  const geometry = edit.box ?? AUTO_BOX;
   const initial = edit.blockText ?? span.text;
   const [text, setText] = useState(initial);
   const [family, setFamily] = useState(cssFamily(span.face, span));
@@ -23,6 +38,7 @@ export function BlockEditor({ docId, edit, zoom }: BlockEditorProps) {
   textRef.current = text;
   const run = useEditor((s) => s.run);
   const setActiveEdit = useEditor((s) => s.setActiveEdit);
+  const patchEdit = useEditor((s) => s.patchEdit);
 
   const faceId = previewFace(span, draft);
   useEffect(() => {
@@ -34,27 +50,68 @@ export function BlockEditor({ docId, edit, zoom }: BlockEditorProps) {
   }, [faceId, span.serif]);
 
   useLayoutEffect(() => {
-    ref.current?.focus();
+    const area = ref.current;
+    if (!area) return;
+    area.focus();
+    area.setSelectionRange(area.value.length, area.value.length);
   }, []);
 
+  const fontCss = `${draft.italic ? "italic " : ""}${draft.bold ? 700 : 400} ${draft.size}px ${family}`;
+  const moved: Rect = [original[0] + geometry.dx, original[1] + geometry.dy, original[2] + geometry.dx, original[3] + geometry.dy];
+  const layout: BoxLayout = (() => {
+    if (geometry.width !== null) {
+      return { box: { x: moved[0], width: geometry.width }, maxWidth: geometry.width, auto: false };
+    }
+    const free = freeSpan(moved, obstacles, null, { width: pageWidth });
+    // A little slack: browser and PDF metrics differ slightly.
+    const natural = naturalWidth(text, fontCss) + Math.max(2, draft.size * 0.25);
+    return {
+      box: autoBox(moved, natural, free, edit.align),
+      maxWidth: autoBox(moved, Infinity, free, edit.align).width,
+      auto: true,
+    };
+  })();
+  const layoutRef = useRef(layout);
+  layoutRef.current = layout;
+
+  const scale = draft.size / span.size;
+  const step = edit.lineHeight ? draft.size * edit.lineHeight : (edit.lineStep ?? span.size * 1.2) * scale;
+  const minHeight = (original[3] - original[1]) * scale * zoom;
+
+  // Fit the height to the text after every render (width, font and size all affect it).
   useLayoutEffect(() => {
     const area = ref.current;
     if (!area) return;
     area.style.height = "auto";
-    area.style.height = `${Math.max(area.scrollHeight, (bbox[3] - bbox[1]) * zoom)}px`;
-  }, [text, zoom, bbox, draft.size, family]);
+    area.style.height = `${Math.max(area.scrollHeight, minHeight)}px`;
+  });
 
   const commit = useCallback(async () => {
     registerCommit(null);
     const latest = useEditor.getState().activeEdit ?? edit;
+    const box = latest.box ?? AUTO_BOX;
+    const { box: hbox, maxWidth, auto } = layoutRef.current;
     setActiveEdit(null);
     const value = textRef.current;
-    if (value === initial && latest.align === "left" && !draftChanged(span, latest.draft)) return;
+    const geometryChanged = box.dx !== 0 || box.dy !== 0 || box.width !== null;
+    const unchanged = value === initial && latest.align === "left" && !latest.lineHeight && !geometryChanged;
+    if (unchanged && !draftChanged(span, latest.draft)) return;
     const report = await run(() =>
-      api.editBlock(docId, { page, bbox, text: value, style: styleFromDraft(span, latest.draft), align: latest.align }),
+      api.editBlock(docId, {
+        page,
+        bbox: original,
+        text: value,
+        style: styleFromDraft(span, latest.draft),
+        align: latest.align,
+        line_height: latest.lineHeight ?? null,
+        width: round2(hbox.width),
+        max_width: auto ? round2(maxWidth) : null,
+        dx: round2(hbox.x - original[0]),
+        dy: round2(box.dy),
+      }),
     );
     reportEdit(report);
-  }, [docId, page, bbox, span, initial, edit, run, setActiveEdit]);
+  }, [docId, page, original, span, initial, edit, run, setActiveEdit]);
 
   useEffect(() => {
     registerCommit(commit);
@@ -66,15 +123,50 @@ export function BlockEditor({ docId, edit, zoom }: BlockEditorProps) {
     setActiveEdit(null);
   };
 
-  const left = bbox[0] * zoom;
-  const top = bbox[1] * zoom;
-  const width = (bbox[2] - bbox[0]) * zoom;
-  const lineHeight = draft.size * 1.18 * zoom;
+  const onGesture = (gesture: BoxGesture) => {
+    const start = useEditor.getState().activeEdit ?? edit;
+    const startBox = start.box ?? AUTO_BOX;
+    const startLayout = layoutRef.current.box;
+    const startSize = start.draft.size;
+    return (dxPx: number, dyPx: number) => {
+      const dx = dxPx / zoom;
+      const dy = dyPx / zoom;
+      if (gesture === "move") {
+        patchEdit({ box: { ...startBox, dx: startBox.dx + dx, dy: startBox.dy + dy } });
+      } else if (gesture === "e" || gesture === "w") {
+        const next = widenBox(startLayout, gesture, dx);
+        patchEdit({ box: { dx: next.x - original[0], dy: startBox.dy, width: next.width } });
+      } else {
+        const scaled = scaleBox(startLayout, startSize, gesture, dx);
+        const current = useEditor.getState().activeEdit;
+        if (!current) return;
+        const box = startBox.width === null ? startBox : { dx: scaled.box.x - original[0], dy: startBox.dy, width: scaled.box.width };
+        patchEdit({ draft: { ...current.draft, size: scaled.size }, box });
+      }
+    };
+  };
+
+  const setAutoWidth = (auto: boolean) => {
+    const { box } = layoutRef.current;
+    patchEdit({ box: auto ? { ...geometry, width: null } : { dx: box.x - original[0], dy: geometry.dy, width: box.width } });
+    ref.current?.focus();
+  };
+
+  const left = layout.box.x * zoom;
+  const top = moved[1] * zoom;
 
   return (
     <>
       <div className="edit-chip" style={{ left, top }} onPointerDown={(e) => e.stopPropagation()}>
-        <span className="chip-label">Paragraph</span>
+        <span className="chip-label">Text box</span>
+        <button
+          className={`icon-btn small${layout.auto ? " active" : ""}`}
+          onClick={() => setAutoWidth(!layout.auto)}
+          title={layout.auto ? "Auto width: grows into free space, then wraps. Click to fix the width." : "Fixed width: text wraps inside the box. Click for auto width."}
+          aria-pressed={layout.auto}
+        >
+          <MoveHorizontal size={14} />
+        </button>
         <button className="btn small primary" onClick={() => void commit()} title="Apply (Ctrl+Enter)">
           <Check size={14} /> Apply
         </button>
@@ -82,33 +174,42 @@ export function BlockEditor({ docId, edit, zoom }: BlockEditorProps) {
           <X size={14} />
         </button>
       </div>
-      <textarea
-        ref={ref}
-        className="block-editor"
-        value={text}
-        spellCheck={false}
-        style={{
-          left,
-          top,
-          width: width + 4,
-          fontFamily: family,
-          fontSize: draft.size * zoom,
-          fontWeight: draft.bold ? 700 : 400,
-          fontStyle: draft.italic ? "italic" : "normal",
-          lineHeight: `${lineHeight}px`,
-          color: draft.color,
-          textAlign: edit.align,
-          textDecoration: [draft.underline && "underline", draft.strike && "line-through"].filter(Boolean).join(" ") || undefined,
-        }}
-        onChange={(e) => setText(e.target.value)}
-        onPointerDown={(e) => e.stopPropagation()}
-        onKeyDown={(e) => {
-          e.stopPropagation();
-          if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) void commit();
-          if (e.key === "Escape") cancel();
-        }}
-        aria-label="Edit paragraph"
-      />
+      <TextBoxFrame
+        left={left}
+        top={top}
+        width={layout.box.width * zoom}
+        autoWidth={layout.auto}
+        onGesture={onGesture}
+        onGestureEnd={() => ref.current?.focus()}
+        onAutoWidth={() => setAutoWidth(true)}
+      >
+        <textarea
+          ref={ref}
+          className="block-editor"
+          value={text}
+          rows={1}
+          spellCheck={false}
+          wrap="soft"
+          style={{
+            fontFamily: family,
+            fontSize: draft.size * zoom,
+            fontWeight: draft.bold ? 700 : 400,
+            fontStyle: draft.italic ? "italic" : "normal",
+            lineHeight: `${step * zoom}px`,
+            color: draft.color,
+            opacity: Math.max(draft.opacity, 0.35),
+            textAlign: edit.align,
+            textDecoration: [draft.underline && "underline", draft.strike && "line-through"].filter(Boolean).join(" ") || undefined,
+          }}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => {
+            e.stopPropagation();
+            if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) void commit();
+            if (e.key === "Escape") cancel();
+          }}
+          aria-label="Edit text box"
+        />
+      </TextBoxFrame>
     </>
   );
 }
