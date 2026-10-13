@@ -74,6 +74,19 @@ ALIASES: dict[str, str] = {
 
 _BOLD_WORDS = ("bold", "black", "heavy", "semibold", "demibold", "extrabold")
 
+# Weight words, compound ones first ("semibold" before "bold").
+STYLE_WEIGHTS: tuple[tuple[str, int], ...] = (
+    ("extrabold", 800), ("ultrabold", 800), ("semibold", 600), ("demibold", 600), ("extralight", 200),
+    ("ultralight", 200), ("hairline", 100), ("bold", 700), ("black", 900), ("heavy", 900),
+    ("light", 300), ("thin", 100), ("medium", 500), ("regular", 400), ("book", 400), ("normal", 400),
+)
+
+
+def weight_of(name: str) -> int | None:
+    """CSS weight a font or style name spells out (``Montserrat-SemiBold`` -> 600), if any."""
+    lowered = re.sub(r"[\s\-_,]", "", name.lower())
+    return next((weight for word, weight in STYLE_WEIGHTS if word in lowered), None)
+
 
 def style_from_name(name: str) -> tuple[bool, bool]:
     """Infer (bold, italic) from a PostScript-ish font name like ``Arial-BoldItalicMT``."""
@@ -122,6 +135,7 @@ class FontCatalog:
         self._cache_file = cache_file
         self._faces: list[FontFace] | None = None
         self._lock = threading.Lock()
+        self.version = 0  # bumped whenever fonts are added
 
     def faces(self) -> list[FontFace]:
         with self._lock:
@@ -137,6 +151,7 @@ class FontCatalog:
         with self._lock:
             faces = self._faces if self._faces is not None else self._load()
             self._faces = [f for f in faces if f.id != user_face.id] + [user_face]
+            self.version += 1
         return user_face
 
     def get(self, face_id: str) -> FontFace | None:
@@ -196,25 +211,36 @@ class FontCatalog:
         return sorted(faces.values(), key=lambda f: (f.family.lower(), f.bold, f.italic))
 
     # ----------------------------------------------------------- substitution
-    def pick_variant(self, family: str, bold: bool, italic: bool) -> FontFace | None:
+    def pick_variant(self, family: str, bold: bool, italic: bool, weight: int | None = None) -> FontFace | None:
         variants = self.families().get(family)
         if not variants:
             return None
 
-        def score(face: FontFace) -> tuple[int, int, int]:
+        def score(face: FontFace) -> tuple[int, int, int, int]:
             plain = face.style.lower() in ("regular", "bold", "italic", "bold italic", "book", "roman")
-            return (int(face.bold == bold) * 2 + int(face.italic == italic) * 2, int(plain), -len(face.style))
+            closeness = -abs((weight_of(face.style) or (700 if face.bold else 400)) - weight) if weight else 0
+            return (int(face.bold == bold) * 2 + int(face.italic == italic) * 2, closeness, int(plain), -len(face.style))
 
         return max(variants, key=score)
+
+    def exact_family(self, original_name: str) -> str | None:
+        """The installed family that *is* the PDF's font (not a look-alike), if any."""
+        key = normalize_font_name(original_name)
+        base_key = re.split(r"(bold|italic|oblique|regular|black|light|medium|semibold|extrabold|thin)", key)[0]
+        by_norm = {normalize_font_name(name): name for name in self.families()}
+        for candidate in (key, base_key, re.sub(r"(mt|ps|psmt)$", "", base_key)):
+            if candidate in by_norm:
+                return by_norm[candidate]
+        return None
 
     def substitute(self, original_name: str, bold: bool, italic: bool, serif: bool, mono: bool) -> FontFace | None:
         key = normalize_font_name(original_name)
         base_key = re.split(r"(bold|italic|oblique|regular|black|light|medium|semibold)", key)[0]
         families = self.families()
-        by_norm = {normalize_font_name(name): name for name in families}
+        exact = self.exact_family(original_name)
+        if exact:
+            return self.pick_variant(exact, bold, italic, weight_of(original_name))
         for candidate in (key, base_key):
-            if candidate in by_norm:
-                return self.pick_variant(by_norm[candidate], bold, italic)
             if candidate in ALIASES and ALIASES[candidate] in families:
                 return self.pick_variant(ALIASES[candidate], bold, italic)
         for alias, family in ALIASES.items():

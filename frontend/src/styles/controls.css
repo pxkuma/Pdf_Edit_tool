@@ -517,3 +517,58 @@
   font-family: ui-monospace, Consolas, monospace;
   text-align: center;
 }
+
+/* "Font not installed" prompt */
+.font-prompt {
+  position: fixed;
+  bottom: 16px;
+  left: 50%;
+  z-index: 190;
+  width: min(460px, calc(100vw - 32px));
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  border-radius: var(--radius);
+  background: var(--white);
+  border: 1px solid var(--border-strong);
+  border-left: 3px solid var(--accent);
+  box-shadow: var(--menu-shadow);
+  font-size: 13px;
+}
+
+.font-prompt p {
+  margin: 0;
+  line-height: 1.45;
+  color: var(--text-2);
+}
+
+.font-prompt p strong {
+  color: var(--text);
+}
+
+.font-prompt-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.font-prompt-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.link-btn {
+  align-self: flex-start;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text-3, var(--text-2));
+  font-size: 12px;
+  text-decoration: underline;
+  cursor: pointer;
+}

@@ -19,7 +19,7 @@ router = APIRouter(prefix="/api/documents/{doc_id}")
 
 IMMUTABLE = "public, max-age=31536000, immutable"
 NO_STORE = "no-store"
-_MODEL_CACHE: OrderedDict[tuple[str, str], dict] = OrderedDict()
+_MODEL_CACHE: OrderedDict[tuple[str, str, int], dict] = OrderedDict()
 _MODEL_CACHE_SIZE = 300
 
 
@@ -58,7 +58,7 @@ def model(doc_id: str, index: int) -> dict:
         state, doc = store.open_current(doc_id)
         page = check_page(doc, index)
         token = state.current.tokens[index]
-        key = (doc_id, token)
+        key = (doc_id, token, deps.catalog().version)
         cached = _MODEL_CACHE.get(key)
         if cached is None:
             cached = {
@@ -79,7 +79,7 @@ def model(doc_id: str, index: int) -> dict:
 
 def _with_faces(model: dict) -> dict:
     """Attach the closest installed font to each span (used for live editing previews)."""
-    memo: dict[tuple, str | None] = {}
+    memo: dict[tuple, tuple[str | None, bool]] = {}
     fonts = deps.catalog()
     for block in model["blocks"]:
         for line in block["lines"]:
@@ -87,8 +87,8 @@ def _with_faces(model: dict) -> dict:
                 key = (span["font"], span["bold"], span["italic"], span["serif"], span["mono"])
                 if key not in memo:
                     face = fonts.substitute(*key)
-                    memo[key] = face.id if face else None
-                span["face"] = memo[key]
+                    memo[key] = (face.id if face else None, fonts.exact_family(span["font"]) is not None)
+                span["face"], span["installed"] = memo[key]
     return model
 
 

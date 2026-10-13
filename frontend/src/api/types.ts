@@ -44,6 +44,8 @@ export interface Span {
   serif: boolean;
   mono: boolean;
   face: string | null;
+  /** The PDF's own font family is installed (not just a look-alike). */
+  installed?: boolean;
   /** Exact style recovered from the content stream (see backend textstate.py). */
   exact: boolean;
   hscale: number;
@@ -149,6 +151,15 @@ export interface DocFont {
   subset: boolean;
   glyphs: number;
   chars: string;
+  installed?: boolean;
+}
+
+/** Whether the font a PDF uses can be had: installed, free download, commercial... */
+export interface FontLookup {
+  name: string;
+  family: string;
+  status: "installed" | "downloadable" | "commercial" | "unknown" | "offline";
+  substitute: string | null;
 }
 
 export interface EditReport {

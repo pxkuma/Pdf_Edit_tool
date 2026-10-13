@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "./api/client";
 import type { DocInfo } from "./api/types";
+import { FontPrompt } from "./components/common/FontPrompt";
 import { Toasts } from "./components/common/Toasts";
 import { ExportDialog } from "./components/dialogs/ExportDialog";
 import { InsertPagesDialog, MetadataDialog, ShortcutsDialog } from "./components/dialogs/MiscDialogs";
@@ -131,6 +132,7 @@ export default function App() {
         <PropertiesPanel />
       </div>
       <Dialogs />
+      <FontPrompt />
       <Toasts />
     </div>
   );

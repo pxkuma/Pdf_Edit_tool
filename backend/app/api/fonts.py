@@ -5,10 +5,12 @@ from __future__ import annotations
 import hashlib
 import re
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
+from pydantic import BaseModel, Field
 
 from .. import deps
+from ..pdf import fontlib
 from .common import ok, read_upload
 
 router = APIRouter(prefix="/api/fonts")
@@ -28,6 +30,36 @@ def list_fonts() -> dict:
         })
     default = deps.default_face()
     return ok({"families": families, "default": default.id if default else None})
+
+
+class FontDownloadBody(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+
+
+@router.get("/lookup")
+def lookup_font(name: str = Query(min_length=1, max_length=120)) -> dict:
+    """Is the PDF font ``name`` installed, downloadable (free), commercial or unknown?"""
+    result = fontlib.lookup(deps.catalog(), name)
+    return ok({"name": result.name, "family": result.family, "status": result.status, "substitute": result.substitute})
+
+
+@router.post("/download")
+def download_font(body: FontDownloadBody) -> dict:
+    """Install the free family of a PDF font so edits continue in that exact font."""
+    catalog = deps.catalog()
+    try:
+        faces = fontlib.download(catalog, body.name, deps.settings().user_fonts_dir)
+    except fontlib.FontLibraryOffline as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except fontlib.FontLibraryError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    weight, italic = fontlib.style_of(body.name)
+    best = catalog.substitute(body.name, weight >= 600, italic, False, False)
+    return ok({
+        "family": faces[0].family,
+        "face": best.id if best else faces[0].id,
+        "faces": [{"id": f.id, "style": f.style} for f in faces],
+    })
 
 
 @router.get("/{face_id}/file")

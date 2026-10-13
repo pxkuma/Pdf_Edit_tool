@@ -1,11 +1,14 @@
+import { Download } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api } from "../../api/client";
 import type { DocFont } from "../../api/types";
+import { promptForFont, useFontPrompt } from "../../lib/fontPrompt";
 import { useEditor } from "../../store/editor";
 
 export function FontsPanel() {
   const doc = useEditor((s) => s.doc);
   const [fonts, setFonts] = useState<DocFont[] | null>(null);
+  const prompting = useFontPrompt((s) => s.lookup !== null);
 
   useEffect(() => {
     if (!doc) return;
@@ -14,7 +17,7 @@ export function FontsPanel() {
     return () => {
       alive = false;
     };
-  }, [doc?.id, doc?.version]);
+  }, [doc?.id, doc?.version, prompting]);
 
   if (!fonts) return <div className="empty">Loading…</div>;
   if (!fonts.length) return <div className="empty">No reusable fonts found (the document may be scanned images).</div>;
@@ -37,6 +40,11 @@ export function FontsPanel() {
           <span>
             {font.type} · {font.embedded ? "embedded" : "not embedded"} · {font.glyphs} characters
           </span>
+          {font.installed === false && (
+            <button className="btn small" style={{ alignSelf: "flex-start" }} onClick={() => void promptForFont(font.name)}>
+              <Download size={14} /> Get the full font…
+            </button>
+          )}
           {font.subset && (
             <span style={{ fontFamily: "ui-monospace, monospace", fontSize: 11, wordBreak: "break-all" }} title="Characters available in this subset">
               {font.chars.trim() || "—"}

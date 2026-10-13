@@ -1,6 +1,7 @@
 import type {
   AnnotStyle,
   DocFont,
+  FontLookup,
   DocInfo,
   EditReport,
   FontFamily,
@@ -106,6 +107,9 @@ export const api = {
     return request("POST", "/api/fonts", form);
   },
   docFonts: (id: string) => request<DocFont[]>("GET", `${doc(id)}/fonts`),
+  fontLookup: (name: string) => request<FontLookup>("GET", `/api/fonts/lookup?name=${encodeURIComponent(name)}`),
+  downloadFont: (name: string) =>
+    request<{ family: string; face: string; faces: { id: string; style: string }[] }>("POST", "/api/fonts/download", { name }),
   search: (id: string, q: string) => request<SearchHit[]>("GET", `${doc(id)}/search?q=${encodeURIComponent(q)}`),
 
   editSpan: (

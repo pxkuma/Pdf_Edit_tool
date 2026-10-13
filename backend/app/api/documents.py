@@ -174,7 +174,9 @@ def put_toc(doc_id: str, body: schemas.TocBody) -> dict:
 def document_fonts(doc_id: str) -> dict:
     with PDF_LOCK:
         _state, doc = deps.store().open_current(doc_id)
-        return ok(textedit.document_fonts(doc))
+        fonts = textedit.document_fonts(doc)
+    catalog = deps.catalog()
+    return ok([{**font, "installed": catalog.exact_family(font["name"]) is not None} for font in fonts])
 
 
 @router.get("/documents/{doc_id}/search")
