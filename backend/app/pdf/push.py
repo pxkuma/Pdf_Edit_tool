@@ -86,7 +86,7 @@ def _touches(a: fitz.Rect, b: fitz.Rect) -> bool:
     return a.x0 <= b.x1 and b.x0 <= a.x1 and a.y0 <= b.y1 and b.y0 <= a.y1
 
 
-def _path_rect(path: dict) -> fitz.Rect:
+def path_rect(path: dict) -> fitz.Rect:
     half = (path.get("width") or 0) / 2
     return fitz.Rect(path["rect"]) + (-half, -half, half, half)
 
@@ -97,7 +97,7 @@ def drawing_clusters(page: fitz.Page) -> list[fitz.Rect]:
     if len(paths) > MAX_PATHS:
         return []
     page_rect = page.rect
-    rects = [_path_rect(p) for p in paths]
+    rects = [path_rect(p) for p in paths]
     # Page-sized backgrounds are not "content below" anything.
     rects = [r for r in rects if not (r.width > page_rect.width * 0.9 and r.height > page_rect.height * 0.5)]
     return cluster_rects(rects)
@@ -110,7 +110,7 @@ def _to_page(page: fitz.Page, bbox: tuple) -> fitz.Rect:
     return rect
 
 
-def _inside(rect: fitz.Rect, area: fitz.Rect) -> bool:
+def inside(rect: fitz.Rect, area: fitz.Rect) -> bool:
     grown = area + (-PAD, -PAD, PAD, PAD)
     return grown.x0 <= rect.x0 and grown.y0 <= rect.y0 and rect.x1 <= grown.x1 and rect.y1 <= grown.y1
 
@@ -160,20 +160,20 @@ def plan(doc: fitz.Document, page: fitz.Page, request: PushRequest, text_lines: 
     return result
 
 
-def _removal_rect(path: dict) -> fitz.Rect:
-    return _path_rect(path) + (-0.6, -0.6, 0.6, 0.6)
+def removal_rect(path: dict) -> fitz.Rect:
+    return path_rect(path) + (-0.6, -0.6, 0.6, 0.6)
 
 
 def _plan_paths(page: fitz.Page, areas: list[fitz.Rect], result: PushPlan) -> None:
     if not areas:
         return
     paths = page.get_drawings()
-    moving = [p for p in paths if any(_inside(_path_rect(p), area) for area in areas)]
-    removal = [_removal_rect(p) for p in moving]
+    moving = [p for p in paths if any(inside(path_rect(p), area) for area in areas)]
+    removal = [removal_rect(p) for p in moving]
     ids = {id(p) for p in moving}
     # Redaction removes every path fully covered by a removal rectangle: put those back.
     result.keep_paths = [p for p in paths if id(p) not in ids
-                         and any(_inside(_path_rect(p), r + (PAD, PAD, -PAD, -PAD)) for r in removal)]
+                         and any(inside(path_rect(p), r + (PAD, PAD, -PAD, -PAD)) for r in removal)]
     result.paths = moving
 
 
@@ -188,7 +188,7 @@ def _plan_images(page: fitz.Page, items: list[PushItem], result: PushPlan) -> No
     infos = page.get_image_info(xrefs=True)
     for item in items:
         area = _to_page(page, item.bbox)
-        info = next((i for i in infos if i.get("xref") == item.xref and _inside(fitz.Rect(i["bbox"]), area)), None)
+        info = next((i for i in infos if i.get("xref") == item.xref and inside(fitz.Rect(i["bbox"]), area)), None)
         if info is None or item.xref <= 0 or not _axis_aligned(info["transform"]):
             result.skipped.append("image")
             continue
@@ -206,7 +206,7 @@ def text_removal_rects(push_plan: PushPlan) -> list[fitz.Rect]:
 
 def remove_graphics(page: fitz.Page, push_plan: PushPlan, redact) -> None:
     """Remove moving paths and images (text is removed with the edited box's own lines)."""
-    rects = [_removal_rect(p) for p in push_plan.paths]
+    rects = [removal_rect(p) for p in push_plan.paths]
     rects += [fitz.Rect(i["bbox"]) + (1, 1, -1, -1) for i in push_plan.images]
     if rects:
         redact(page, rects, images=fitz.PDF_REDACT_IMAGE_REMOVE,
@@ -219,9 +219,9 @@ def place_graphics(page: fitz.Page, push_plan: PushPlan) -> None:
     if push_plan.paths or push_plan.keep_paths:
         shape = page.new_shape()
         for path in push_plan.keep_paths:
-            _draw(shape, path, fitz.Identity)
+            draw_path(shape, path, fitz.Identity)
         for path in push_plan.paths:
-            _draw(shape, path, shift)
+            draw_path(shape, path, shift)
         shape.commit(overlay=True)
     for info in push_plan.images:
         page.insert_image(fitz.Rect(info["bbox"]) * shift, xref=info["xref"], keep_proportion=False, overlay=True)
@@ -245,7 +245,7 @@ def place_copies(page: fitz.Page, push_plan: PushPlan) -> None:
         page.show_pdf_page(clip * shift, push_plan.snapshot, 0, clip=clip)
 
 
-def _draw(shape: fitz.Shape, path: dict, matrix: fitz.Matrix) -> None:
+def draw_path(shape: fitz.Shape, path: dict, matrix: fitz.Matrix) -> None:
     for item in path["items"]:
         kind = item[0]
         if kind == "l":

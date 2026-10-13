@@ -11,8 +11,8 @@ export function draftFromSpan(span: Span): SpanDraft {
     color: span.color,
     bold: span.bold,
     italic: span.italic,
-    underline: false,
-    strike: false,
+    underline: span.underline ?? false,
+    strike: span.strike ?? false,
     opacity: span.opacity,
     charSpacing: null, // null = keep the original spacing exactly
     hscale: span.hscale || 100,
@@ -37,7 +37,13 @@ export function styleFromDraft(span: Span, draft: SpanDraft): Partial<TextStyle>
 
 export function draftChanged(span: Span, draft: SpanDraft): boolean {
   const style = styleFromDraft(span, draft);
-  return draft.font !== "original" || Object.keys(style).length > 3 || draft.underline || draft.strike || draft.fitWidth;
+  return (
+    draft.font !== "original" ||
+    Object.keys(style).length > 3 ||
+    draft.underline !== (span.underline ?? false) ||
+    draft.strike !== (span.strike ?? false) ||
+    draft.fitWidth
+  );
 }
 
 /** The installed face used to preview a draft in the browser. */

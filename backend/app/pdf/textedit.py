@@ -7,7 +7,7 @@ from dataclasses import dataclass, field, replace
 
 import pymupdf as fitz
 
-from . import extract, fontres, ocr, pdfobj, push, textstate
+from . import decor, extract, fontres, ocr, pdfobj, push, textstate
 from .fonts import FontCatalog, FontFace, style_from_name
 from .geometry import (
     from_display_point,
@@ -29,8 +29,8 @@ class StyleRequest:
     color: str | None = None
     bold: bool | None = None
     italic: bool | None = None
-    underline: bool = False
-    strike: bool = False
+    underline: bool | None = None  # None: keep what the text has
+    strike: bool | None = None
     opacity: float | None = None
     char_spacing: float | None = None
     hscale: float | None = None
@@ -145,6 +145,8 @@ class _FontPlan:
     chain: FontChain
     bold_synth: bool
     italic_synth: bool
+    drop_fake_bold: bool = False  # the text was bolded by stroking: stop doing that
+    drop_fake_italic: bool = False  # the text was slanted by its matrix: straighten it
 
 
 def plan_fonts(
@@ -155,8 +157,10 @@ def plan_fonts(
     span: dict | None,
 ) -> _FontPlan:
     base = _span_flags(span) if span else {"bold": False, "italic": False, "serif": False, "mono": False}
-    bold = base["bold"] if request.bold is None else request.bold
-    italic = base["italic"] if request.italic is None else request.italic
+    fake_bold, fake_italic = extract.synthetic_style(span) if span else (False, False)
+    shown_bold, shown_italic = base["bold"] or fake_bold, base["italic"] or fake_italic
+    bold = shown_bold if request.bold is None else request.bold
+    italic = shown_italic if request.italic is None else request.italic
     font_name = span["font"] if span else "Helvetica"
 
     if request.font.startswith("face:"):
@@ -176,10 +180,24 @@ def plan_fonts(
         embedded = _record_font(doc, span) or resolve_span_font(doc, page, span)
 
     substitute = catalog.substitute(font_name, bold, italic, base["serif"], base["mono"])
+    drop_bold, drop_italic = fake_bold and not bold, fake_italic and not italic
+    variant = _real_variant(catalog, font_name, bold, italic) if (bold, italic) != (base["bold"], base["italic"]) else None
+    if embedded is not None and (variant is not None or (base["bold"] and not bold) or (base["italic"] and not italic)):
+        # The embedded font cannot lose (or gain) its own weight/slant: use the matching face.
+        face = variant or substitute
+        return _FontPlan(FontChain.build(catalog, None, face), bold and not (face and face.bold),
+                         italic and not (face and face.italic), fake_bold, fake_italic)
     chain = FontChain.build(catalog, embedded, substitute)
     if embedded is None:
-        return _FontPlan(chain, False, False)
-    return _FontPlan(chain, bold and not base["bold"], italic and not base["italic"])
+        return _FontPlan(chain, False, False, drop_bold, drop_italic)
+    return _FontPlan(chain, bold and not shown_bold, italic and not shown_italic, drop_bold, drop_italic)
+
+
+def _real_variant(catalog: FontCatalog, font_name: str, bold: bool, italic: bool) -> FontFace | None:
+    """The installed face of the text's own family in the wanted weight/slant, if there is one."""
+    family = catalog.exact_family(font_name)
+    face = catalog.pick_variant(family, bold, italic) if family else None
+    return face if face is not None and face.bold == bold and face.italic == italic else None
 
 
 def _style(
@@ -203,8 +221,8 @@ def _style(
         opacity=max(0.0, min(1.0, request.opacity if request.opacity is not None else opacity_default)),
         bold_synth=plan.bold_synth,
         italic_synth=plan.italic_synth,
-        underline=request.underline,
-        strike=request.strike,
+        underline=bool(request.underline),
+        strike=bool(request.strike),
         char_spacing=request.char_spacing or 0.0,
         hscale=max(10.0, min(400.0, request.hscale or 100.0)),
     )
@@ -228,15 +246,15 @@ def _exact_style(request: StyleRequest, span: dict, plan: _FontPlan, record: tex
         opacity=1.0 if request.opacity is None else max(0.0, min(1.0, request.opacity)),
         bold_synth=plan.bold_synth,
         italic_synth=plan.italic_synth,
-        underline=request.underline,
-        strike=request.strike,
+        underline=bool(request.underline),
+        strike=bool(request.strike),
         char_spacing=record.page_char_spacing * scale if request.char_spacing is None else request.char_spacing,
         hscale=max(10.0, min(400.0, request.hscale or record.effective_hscale)),
         word_spacing=record.page_word_spacing * scale,
         rise=record.page_rise * scale,
-        skew=record.skew,
-        render_mode=record.render_mode,
-        line_width=record.line_width * scale,
+        skew=0.0 if plan.drop_fake_italic else record.skew,
+        render_mode=record.render_mode - 2 if plan.drop_fake_bold and record.render_mode in (2, 6) else record.render_mode,
+        line_width=None if plan.drop_fake_bold else record.line_width * scale,
         **bind_resources(request, record, doc, page),
     )
 
@@ -374,6 +392,7 @@ def _reflow_jobs(
     followers: list[dict],
     delta: float,
     direction: tuple[float, float],
+    requests: list[StyleRequest] | None = None,
 ) -> list[tuple[dict, _WriteJob]]:
     """Shift the spans following an edited span along the line by ``delta`` points.
 
@@ -381,8 +400,8 @@ def _reflow_jobs(
     original font (we never degrade untouched text just to close a gap).
     """
     jobs = []
-    for span in followers:
-        job = _span_job(doc, page, catalog, span, span["text"], StyleRequest())
+    for i, span in enumerate(followers):
+        job = _span_job(doc, page, catalog, span, span["text"], requests[i] if requests else StyleRequest())
         embedded = job.chain.embedded
         primary = span.get("primary_text", span["text"])
         if embedded is None or job.chain.missing or embedded.coverage(primary) < 1.0:
@@ -390,6 +409,19 @@ def _reflow_jobs(
         job.origin = (job.origin[0] + direction[0] * delta, job.origin[1] + direction[1] * delta)
         jobs.append((span, job))
     return jobs
+
+
+def _with_decorations(request: StyleRequest, found: dict[str, list[dict]]) -> StyleRequest:
+    """Underline/strike left unset keep what the text already has."""
+    return replace(
+        request,
+        underline=bool(found["underline"]) if request.underline is None else request.underline,
+        strike=bool(found["strike"]) if request.strike is None else request.strike,
+    )
+
+
+def _merge_found(items: list[dict[str, list[dict]]]) -> dict[str, list[dict]]:
+    return {kind: [path for found in items for path in found[kind]] for kind in ("underline", "strike")}
 
 
 def _following_runs(runs: list[dict], index: int, direction: tuple[float, float]) -> list[dict]:
@@ -416,7 +448,9 @@ def edit_span(doc: fitz.Document, page: fitz.Page, catalog: FontCatalog, edit: S
     record = span.get("record")
     if record is not None and record.render_mode in (3, 7) and edit.ocr_mode == "replace":
         return _replace_scanned(doc, page, catalog, edit, span, direction)
-    main = _span_job(doc, page, catalog, span, edit.text, edit.style, edit.fit_width)
+    rules = decor.page_rules(page)
+    found_main = decor.for_run(span, line["bbox"], direction, rules)
+    main = _span_job(doc, page, catalog, span, edit.text, _with_decorations(edit.style, found_main), edit.fit_width)
     moved = bool(edit.dx or edit.dy)
     if moved:
         move = _display_delta(page, edit.dx, edit.dy)
@@ -426,9 +460,13 @@ def edit_span(doc: fitz.Document, page: fitz.Page, catalog: FontCatalog, edit: S
         delta = line_width(main.glyphs, main.style) - _advance(span, direction)
         if abs(delta) > 0.05:
             candidates = _following_runs(runs, index, direction)
-            followers = _reflow_jobs(doc, page, catalog, candidates, delta, direction)
+            found = [decor.for_run(c, line["bbox"], direction, rules) for c in candidates]
+            requests = [_with_decorations(StyleRequest(), f) for f in found]
+            followers = _reflow_jobs(doc, page, catalog, candidates, delta, direction, requests)
+            found_main = _merge_found([found_main] + found[:len(followers)])
     rects = [shrink_for_redaction(fitz.Rect(s["bbox"]), direction) for s in [span] + [f[0] for f in followers]]
     redact_areas(page, rects)
+    decor.erase(page, found_main["underline"] + found_main["strike"], redact_areas)
     for job in [main] + [f[1] for f in followers]:
         _rebind(job, doc, page)
         write_lines(doc, page, [PlacedLine(job.origin, direction, job.glyphs)], job.style, job.chain)
@@ -460,8 +498,8 @@ def _replace_scanned(doc: fitz.Document, page: fitz.Page, catalog: FontCatalog, 
         size=size,
         color=hex_to_rgb(request.color, ink),
         opacity=1.0 if request.opacity is None else request.opacity,
-        underline=request.underline,
-        strike=request.strike,
+        underline=bool(request.underline),
+        strike=bool(request.strike),
         char_spacing=request.char_spacing or 0.0,
         # The invisible OCR layer is squeezed to Tesseract's tight ink boxes, so its
         # width scale is not a property of the scanned font: use natural width.
@@ -558,6 +596,10 @@ def edit_block(doc: fitz.Document, page: fitz.Page, catalog: FontCatalog, edit: 
     records = textstate.page_text_records(doc, page)
     first_runs = extract.attach_records(doc, extract.line_runs(lines[0], tagged), direction, records, tagged)
     first_span = max(first_runs, key=lambda s: len(s["text"]))
+    rules = decor.page_rules(page)
+    found = _merge_found([decor.for_run(run, line["bbox"], direction, rules)
+                          for line in lines for run in extract.line_runs(line, tagged)])
+    edit = replace(edit, style=_with_decorations(edit.style, found))
     plan = plan_fonts(doc, page, catalog, edit.style, first_span)
     style = _style(edit.style, first_span, plan, doc, page)
     step = _line_step(lines, direction, style.size, edit.line_height)
@@ -579,6 +621,7 @@ def edit_block(doc: fitz.Document, page: fitz.Page, catalog: FontCatalog, edit: 
         removal += [shrink_for_redaction(r, tuple(line.get("dir", (1.0, 0.0))))
                     for r, line in zip(push.text_removal_rects(push_plan), push_plan.lines)]
     redact_areas(page, removal)
+    decor.erase(page, found["underline"] + found["strike"], redact_areas)
     if push_plan is not None:
         push.remove_graphics(page, push_plan, redact_areas)
         push.place_graphics(page, push_plan)

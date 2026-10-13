@@ -46,6 +46,9 @@ export interface Span {
   face: string | null;
   /** The PDF's own font family is installed (not just a look-alike). */
   installed?: boolean;
+  /** Underline / strikethrough lines drawn for this text (detected on the page). */
+  underline?: boolean;
+  strike?: boolean;
   /** Exact style recovered from the content stream (see backend textstate.py). */
   exact: boolean;
   hscale: number;

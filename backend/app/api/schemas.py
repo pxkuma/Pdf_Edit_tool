@@ -17,8 +17,8 @@ class StyleBody(BaseModel):
     color: str | None = Field(None, pattern=HEX_COLOR)
     bold: bool | None = None
     italic: bool | None = None
-    underline: bool = False
-    strike: bool = False
+    underline: bool | None = None  # None: keep what the text already has
+    strike: bool | None = None
     opacity: float | None = Field(None, ge=0, le=1)
     char_spacing: float | None = Field(None, ge=-50, le=200)
     hscale: float | None = Field(None, ge=10, le=400)

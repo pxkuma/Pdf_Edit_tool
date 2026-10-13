@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pymupdf as fitz
 
-from . import pdfobj, textstate
+from . import decor, pdfobj, textstate
 from .fontres import TAG_KEY, clean_font_name, normalize_font_name
 from .geometry import color_to_hex, to_display_point, to_display_rect, to_display_vector
 
@@ -156,6 +156,27 @@ def exact_style(doc: fitz.Document, page: fitz.Page, run: dict) -> dict:
     }
 
 
+def synthetic_style(run: dict) -> tuple[bool, bool]:
+    """(bold, italic) produced without a bold/italic font: fill+stroke rendering, slanted matrix."""
+    record = run.get("record")
+    if record is None:
+        return False, False
+    return record.render_mode in (2, 6), abs(record.skew) > 0.05
+
+
+def detected_style(run: dict, line_bbox: tuple, direction: tuple, rules: list[dict]) -> dict:
+    """Bold/italic (real or synthetic) and decorations as the user sees them."""
+    flags = span_style_flags(run)
+    fake_bold, fake_italic = synthetic_style(run)
+    found = decor.for_run(run, line_bbox, direction, rules)
+    return {
+        "bold": flags["bold"] or fake_bold,
+        "italic": flags["italic"] or fake_italic,
+        "underline": bool(found["underline"]),
+        "strike": bool(found["strike"]),
+    }
+
+
 def line_runs(line: dict, tagged: set[str]) -> list[dict]:
     direction = tuple(line.get("dir", (1.0, 0.0)))
     runs: list[dict] = []
@@ -173,6 +194,7 @@ def page_text_model(page: fitz.Page) -> dict:
     tagged = tagged_font_names(page)
     doc = page.parent
     records = textstate.page_text_records(doc, page)
+    rules = decor.page_rules(page)
     blocks = []
     for b_index, block in enumerate(page_dict(page).get("blocks", [])):
         if block.get("type", 0) != 0:
@@ -182,7 +204,8 @@ def page_text_model(page: fitz.Page) -> dict:
             direction = tuple(line.get("dir", (1.0, 0.0)))
             runs = attach_records(doc, line_runs(line, tagged), direction, records, tagged)
             spans = [
-                {**_span_model(page, run, f"{b_index}-{l_index}-{r_index}", direction), **exact_style(doc, page, run)}
+                {**_span_model(page, run, f"{b_index}-{l_index}-{r_index}", direction), **exact_style(doc, page, run),
+                 **detected_style(run, line["bbox"], direction, rules)}
                 for r_index, run in enumerate(runs)
             ]
             if spans:
