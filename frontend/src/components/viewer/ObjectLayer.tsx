@@ -87,11 +87,8 @@ export function ObjectLayer({ docId, page, model, zoom }: ObjectLayerProps) {
         title={title}
         onPointerDown={(event) => {
           event.stopPropagation();
-          if (!selected) {
-            onSelect();
-            return;
-          }
-          beginDrag(event, key, rect, null, onCommit);
+          if (!selected) onSelect();
+          beginDrag(event, key, rect, null, onCommit); // press and drag moves it straight away
         }}
       >
         {selected &&
@@ -116,7 +113,7 @@ export function ObjectLayer({ docId, page, model, zoom }: ObjectLayerProps) {
           selection?.kind === "image" && selection.page === page && selection.xref === image.xref,
           () => select({ kind: "image", page, xref: image.xref }),
           (rect) => commitImage(image, rect),
-          "Image — click to select, drag to move",
+          "Image — drag to move, handles resize",
         ),
       )}
       {annotations.map((annot) =>

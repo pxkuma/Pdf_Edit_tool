@@ -48,9 +48,9 @@ Scanned pages are detected automatically. **Run OCR** (Edit → OCR, or the bann
 
 ### Text boxes
 
-Double-click text (or use the text-box button while editing a word) to edit it as a box. Text you add with **Add text** works the same way.
+Click text to select its box, then double-click (or press Enter) to type. A box with mixed styles is edited run by run, so no formatting is lost. Text you add with **Add text** works the same way. Style toggles (bold, italic, underline, strikethrough, opacity) show the text's real state and switch off cleanly.
 
-- **Auto width (default):** the box keeps its size for shorter text and grows into the free space beside it for longer text. A longer name stays on one line while there is room, and it only wraps where the next text or the page margin begins. Right-aligned text grows to the left, centred text grows both ways.
+- **Auto width (default):** the box keeps its size for shorter text and grows as you type, so a longer name stays on one line. It only wraps at the page edge, with no margin or neighbour limits. Right-aligned text grows to the left, centred text grows both ways.
 - **Side handles** set a fixed width and the text wraps inside it. Double-click a side handle (or the ↔ button) to go back to auto width.
 - **Corner handles** resize the text: font size and box scale together.
 - **Drag the border** to move the box. Smart guides snap it to other text and the page centre (hold Alt to move freely). Alt+arrow keys nudge it by 1 pt, Alt+Shift+arrows by 10 pt. Properties has exact X, Y and width fields, alignment and line spacing.
@@ -59,7 +59,7 @@ Double-click text (or use the text-box button while editing a word) to edit it a
 
 ## Features
 
-- **Edit:** click any text to edit it in place, or double-click to edit it as a **text box** (see below). You can change the font, size, color, bold/italic/underline/strike, opacity, letter spacing and width scale, and move text around. You can also add new text in any installed font, any font already in the document, or a font you upload (.ttf/.otf). Find & replace keeps the original fonts.
+- **Edit:** in **Edit text** mode every text box, image and vector graphic (lines, boxes, table rules) on the page can be grabbed, Canva-style. Press and drag moves it right away, a click shows resize handles, arrow keys nudge it (Shift: 10 pt), Delete removes it and double-click types into text. Moving keeps everything exactly as it was: fonts, mixed styles, colours, underlines. Images keep their proportions from a corner (hold Shift to stretch). You can change the font, size, color, bold/italic/underline/strike, opacity, letter spacing and width scale, and move text around. You can also add new text in any installed font, any font already in the document, or a font you upload (.ttf/.otf). Find & replace keeps the original fonts.
 - **Annotate:** highlight, underline, strikeout, squiggly, freehand drawing, rectangles, ellipses, lines, arrows, sticky notes, text-box comments and stamps. You can select, move, resize and restyle any of them.
 - **Fill & sign:** fill existing form fields directly on the page. You can also add text fields and checkboxes, and insert drawn, typed or uploaded signatures (saved per browser), dates and check marks. Forms can be flattened.
 - **Pages:** thumbnails with drag-and-drop reordering and multi-select. Rotate, insert blank pages, merge PDFs or images, duplicate, delete, crop/uncrop, extract and split.

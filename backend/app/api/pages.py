@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections import OrderedDict
 
 import pymupdf as fitz
@@ -11,6 +12,7 @@ from fastapi.responses import FileResponse, Response
 
 from .. import deps
 from ..pdf import annots, extract, forms, images, ocr, pages, push
+from ..pdf.fonts import FontFace
 from ..pdf.geometry import to_display_rect
 from ..storage import PDF_LOCK
 from . import schemas
@@ -79,6 +81,16 @@ def model(doc_id: str, index: int) -> dict:
     return ok(cached)
 
 
+_INSERTED = re.compile(r"^PSF([0-9a-f]{8})-")
+
+
+def _inserted_face(name: str) -> FontFace | None:
+    match = _INSERTED.match(name)
+    if not match:
+        return None
+    return next((f for f in deps.catalog().faces() if f.id.startswith(match.group(1))), None)
+
+
 def _with_faces(model: dict) -> dict:
     """Attach the closest installed font to each span (used for live editing previews)."""
     memo: dict[tuple, tuple[str | None, bool]] = {}
@@ -86,6 +98,12 @@ def _with_faces(model: dict) -> dict:
     for block in model["blocks"]:
         for line in block["lines"]:
             for span in line["spans"]:
+                inserted = _inserted_face(span["font"])
+                if inserted is not None:
+                    # A font this editor embedded (internal name PSF<id>-...): show its real name.
+                    span["font"] = f"{inserted.family} {inserted.style}".replace(" Regular", "")
+                    span["face"], span["installed"] = inserted.id, True
+                    continue
                 key = (span["font"], span["bold"], span["italic"], span["serif"], span["mono"])
                 if key not in memo:
                     face = fonts.substitute(*key)

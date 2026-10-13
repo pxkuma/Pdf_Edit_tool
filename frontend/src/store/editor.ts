@@ -127,6 +127,11 @@ export interface ActiveEdit {
   span: Span;
   blockId?: string;
   boxSpanIds?: string[]; // spans replaced by the text box
+  boxSpans?: Span[];
+  boxLines?: Rect[]; // the box's line rectangles (for exact moves and deletion)
+  typing?: boolean; // false: selected (move/resize), true: editing its text
+  uniform?: boolean; // one style: can be retyped as a whole without losing formatting
+  pressedAt?: number; // when it was selected (a second press soon after = double-click)
   blockBbox?: Rect;
   blockText?: string;
   lineStep?: number; // original baseline distance (pt) at the span's size

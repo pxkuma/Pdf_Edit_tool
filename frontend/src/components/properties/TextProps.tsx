@@ -189,12 +189,12 @@ export function ActiveEditProps() {
                 })
               }
             />
-            Auto width: use free space before wrapping
+            Auto width: grows as you type, wraps only at the page edge
           </label>
           <p className="muted" style={{ margin: 0, fontSize: 12 }}>
-            Drag the border to move; it snaps to other text and the page centre (hold Alt to move freely).
-            Alt+arrow keys nudge by 1 pt, Alt+Shift+arrows by 10 pt. Side handles set the width; corner handles
-            resize the text. Ctrl+Enter applies, Esc cancels.
+            Drag the box to move it anywhere; it snaps to other text and the page centre (hold Alt to move freely).
+            Arrow keys nudge by 1 pt (Shift: 10 pt; Alt+arrows while typing). Side handles set the width; corner
+            handles resize the text. Double-click or Enter to type, Delete removes the box. Click outside to apply.
           </p>
         </div>
         <PushProps />

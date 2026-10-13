@@ -2,9 +2,8 @@
  * Geometry of editable text boxes (page points, display space).
  *
  * A box is auto-width by default: it keeps its original width for shorter text
- * and grows into the free space beside it for longer text, so a longer name on a
- * single line never drops onto a second line while there is room. Only when the
- * free space runs out (or the user fixes the width) does the text wrap.
+ * and grows for longer text, so a longer name on a single line never drops onto
+ * a second line. Only at the page edge (or a width the user fixed) does it wrap.
  */
 import type { Rect, TextBlock, TextLine } from "../api/types";
 
@@ -23,33 +22,8 @@ export interface FreeSpan {
 }
 
 const MIN_WIDTH = 12;
-const GAP = 4; // keep this far away from neighbouring text
 const MIN_SIZE = 1;
 const MAX_SIZE = 500;
-
-function overlapsVertically(a: Rect, b: Rect): boolean {
-  const overlap = Math.min(a[3], b[3]) - Math.max(a[1], b[1]);
-  return overlap > Math.min(a[3] - a[1], b[3] - b[1]) * 0.25;
-}
-
-/** Horizontal room around ``box``: up to the nearest text on the same lines, else the page margin. */
-export function freeSpan(
-  box: Rect,
-  blocks: { id: string; bbox: Rect }[],
-  excludeId: string | null,
-  page: { width: number },
-): FreeSpan {
-  const others = blocks.filter((b) => b.id !== excludeId);
-  const margin = Math.max(18, Math.min(72, ...blocks.map((b) => b.bbox[0])));
-  let right = page.width - margin;
-  let left = margin;
-  for (const { bbox } of others) {
-    if (!overlapsVertically(box, bbox)) continue;
-    if (bbox[0] >= box[2] - 1) right = Math.min(right, bbox[0] - GAP);
-    if (bbox[2] <= box[0] + 1) left = Math.max(left, bbox[2] + GAP);
-  }
-  return { left: Math.min(left, box[0]), right: Math.max(right, box[2]) };
-}
 
 /** Auto-width box for text whose widest line is ``natural`` points wide. */
 export function autoBox(original: Rect, natural: number, free: FreeSpan, align: Align): HBox {

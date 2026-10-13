@@ -90,7 +90,13 @@ export function lineStep(block: TextBlock, size: number): number {
   return deltas.length ? deltas[Math.floor(deltas.length / 2)] : size * 1.2;
 }
 
-export function beginBlockEdit(page: number, block: TextBlock, text?: string): ActiveEdit | null {
+export interface BlockEditOptions {
+  typing?: boolean;
+  uniform?: boolean;
+  pressedAt?: number;
+}
+
+export function beginBlockEdit(page: number, block: TextBlock, text?: string, options: BlockEditOptions = {}): ActiveEdit | null {
   const spans = block.lines.flatMap((l) => l.spans);
   if (!spans.length) return null;
   const main = spans.reduce((a, b) => (b.text.length > a.text.length ? b : a));
@@ -102,6 +108,11 @@ export function beginBlockEdit(page: number, block: TextBlock, text?: string): A
     span: main,
     blockId: block.id,
     boxSpanIds: spans.map((s) => s.id),
+    boxSpans: spans,
+    boxLines: block.lines.filter((l) => l.spans.some((s) => s.text.trim())).map((l) => l.bbox),
+    typing: options.typing ?? true,
+    uniform: options.uniform ?? true,
+    pressedAt: options.pressedAt,
     blockBbox: block.bbox,
     blockText: text ?? blockText(block),
     lineStep: lineStep(block, main.size),

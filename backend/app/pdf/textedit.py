@@ -244,6 +244,8 @@ def _exact_style(request: StyleRequest, span: dict, plan: _FontPlan, record: tex
         size=size,
         color=color,
         opacity=1.0 if request.opacity is None else max(0.0, min(1.0, request.opacity)),
+        # The original graphics states may carry a transparency: a chosen opacity overrides it.
+        force_opacity=request.opacity is not None,
         bold_synth=plan.bold_synth,
         italic_synth=plan.italic_synth,
         underline=bool(request.underline),

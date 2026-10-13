@@ -1,37 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { Rect, Span, TextBlock, TextLine } from "../api/types";
-import { autoBox, freeSpan, scaleBox, textBoxLines, widenBox } from "./textBox";
+import { autoBox, scaleBox, textBoxLines, widenBox } from "./textBox";
 
-const page = { width: 612, height: 792 };
 const name: Rect = [72, 100, 120, 114]; // a short single-line "name" block
-
-describe("freeSpan", () => {
-  it("extends to the page margin when nothing is beside the box", () => {
-    const span = freeSpan(name, [{ id: "a", bbox: name }], "a", page);
-    expect(span.right).toBe(612 - 72);
-    expect(span.left).toBe(72);
-  });
-
-  it("stops before a block on the same line", () => {
-    const value: Rect = [300, 101, 360, 113];
-    const span = freeSpan(name, [{ id: "a", bbox: name }, { id: "b", bbox: value }], "a", page);
-    expect(span.right).toBeLessThan(300);
-    expect(span.right).toBeGreaterThan(290);
-  });
-
-  it("ignores blocks on other lines", () => {
-    const below: Rect = [200, 140, 400, 154];
-    const span = freeSpan(name, [{ id: "a", bbox: name }, { id: "b", bbox: below }], "a", page);
-    expect(span.right).toBe(612 - 72);
-  });
-
-  it("never shrinks below the original box", () => {
-    const wide: Rect = [20, 100, 600, 114];
-    const span = freeSpan(wide, [{ id: "a", bbox: wide }], "a", page);
-    expect(span.left).toBeLessThanOrEqual(20);
-    expect(span.right).toBeGreaterThanOrEqual(600);
-  });
-});
 
 describe("autoBox", () => {
   const free = { left: 72, right: 540 };

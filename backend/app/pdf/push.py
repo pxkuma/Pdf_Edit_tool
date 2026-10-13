@@ -19,6 +19,8 @@ from dataclasses import dataclass, field
 
 import pymupdf as fitz
 
+from . import annots
+
 PAD = 1.5  # tolerance when matching objects to the items the editor sent
 MAX_PATHS = 6000  # pages with more vector paths than this are not clustered
 _MOVABLE_ANNOTS = {
@@ -245,8 +247,10 @@ def place_graphics(page: fitz.Page, push_plan: PushPlan) -> None:
             widget.update()
     for annot in page.annots() or []:
         if annot.xref in push_plan.annots:
-            annot.set_rect(annot.rect * shift)
+            target = annot.rect * shift
+            annot.set_rect(target)
             annot.update()
+            annots.keep_rect(annot, target)
 
 
 def place_copies(page: fitz.Page, push_plan: PushPlan) -> None:

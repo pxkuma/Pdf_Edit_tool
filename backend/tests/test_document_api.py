@@ -258,3 +258,22 @@ def test_revert(client, doc):
     client.post(f"/api/documents/{doc['id']}/pages/delete", json={"pages": [1]})
     reverted = client.post(f"/api/documents/{doc['id']}/revert").json()["data"]["document"]
     assert len(reverted["pages"]) == 2
+
+
+def test_moving_an_annotation_keeps_its_size(client, doc):
+    doc_id = doc["id"]
+    body = {"page": 0, "kind": "rect", "start": [100, 500], "end": [200, 560], "style": {"color": "#ff0000", "width": 2}}
+    assert client.post(f"/api/documents/{doc_id}/annotations", json=body).status_code == 200
+
+    def square():
+        model = client.get(f"/api/documents/{doc_id}/pages/0/model").json()["data"]
+        return next(a for a in model["annotations"] if a["type"] == "Square")
+
+    for step in range(3):
+        annot = square()
+        rect = [annot["rect"][0], annot["rect"][1] + 20, annot["rect"][2], annot["rect"][3] + 20]
+        response = client.patch(f"/api/documents/{doc_id}/annotations/0/{annot['xref']}",
+                                json={"style": {"color": "#ff0000", "width": 2}, "rect": rect})
+        assert response.status_code == 200, response.text
+        after = square()["rect"]
+        assert all(abs(a - b) < 0.3 for a, b in zip(after, rect)), (step, rect, after)

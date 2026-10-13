@@ -8,7 +8,7 @@ import { ActiveEditProps, NewTextProps } from "./TextProps";
 const HINTS: Partial<Record<Tool, string>> = {
   select: "Select text to copy or mark it up. Click annotations or images to move, resize or style them. Fill form fields directly on the page.",
   pan: "Drag to scroll around the document.",
-  editText: "Hover any text and click to edit it in its original font. Double-click to rewrite a whole paragraph.",
+  editText: "Drag any text box, image or graphic to move it; click it to get resize handles. Double-click text to type in its original font. Delete removes the selected object.",
   whiteout: "Drag over an area to cover it with white and remove the text underneath.",
   eraseText: "Drag over text to delete it while keeping backgrounds and graphics.",
   redact: "Drag over an area to permanently remove everything underneath (text, images, graphics).",

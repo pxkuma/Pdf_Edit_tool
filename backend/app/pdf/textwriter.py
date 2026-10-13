@@ -35,6 +35,7 @@ class TextStyle:
     size: float
     color: tuple[float, float, float] = (0.0, 0.0, 0.0)
     opacity: float = 1.0
+    force_opacity: bool = False  # set the opacity even at 100% (overrides inherited states)
     bold_synth: bool = False
     italic_synth: bool = False
     underline: bool = False
@@ -339,8 +340,8 @@ def _decorations(page: fitz.Page, line: PlacedLine, style: TextStyle, stroke_ops
     return ops
 
 
-def opacity_state(doc: fitz.Document, page: fitz.Page, opacity: float) -> str | None:
-    if opacity >= 0.999:
+def opacity_state(doc: fitz.Document, page: fitz.Page, opacity: float, force: bool = False) -> str | None:
+    if opacity >= 0.999 and not force:
         return None
     level = max(0, min(100, round(opacity * 100)))
     name = f"PSGa{level}"
@@ -358,6 +359,6 @@ def write_lines(
     chain: FontChain,
 ) -> None:
     font_names = register_fonts(doc, page, chain)
-    gstate = opacity_state(doc, page, style.opacity)
+    gstate = opacity_state(doc, page, style.opacity, style.force_opacity)
     content = build_content(page, lines, style, font_names, gstate)
     pdfobj.append_content(doc, page, content)

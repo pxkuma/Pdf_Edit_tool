@@ -1,23 +1,24 @@
-import { Check, MoveHorizontal, X } from "lucide-react";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Check, MoveHorizontal, Pencil, X } from "lucide-react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
 import { api } from "../../api/client";
-import type { Rect } from "../../api/types";
+import type { Point, Rect } from "../../api/types";
 import { registerCommit } from "../../lib/editSession";
 import { cssFamily, ensureFace } from "../../lib/fonts";
-import { boxGrowth, pushConflicts, selectPush, type PushCandidate } from "../../lib/push";
+import type { PushCandidate } from "../../lib/push";
 import { NUDGE, SNAP_PX, snapBox, snapEdge, snapTargets, type Guides } from "../../lib/snap";
-import { autoBox, freeSpan, naturalWidth, scaleBox, widenBox, type HBox } from "../../lib/textBox";
-import { AUTO_BOX, DEFAULT_PUSH, useEditor, type ActiveEdit } from "../../store/editor";
-import { draftChanged, previewFace, reportEdit, styleFromDraft } from "./editHelpers";
+import { autoBox, naturalWidth, scaleBox, widenBox, type HBox } from "../../lib/textBox";
+import { AUTO_BOX, useEditor, type ActiveEdit } from "../../store/editor";
+import { beginSpanEdit, draftChanged, previewFace, reportEdit, styleFromDraft } from "./editHelpers";
 import { PushPreview } from "./PushPreview";
 import { SnapGuides } from "./SnapGuides";
 import { TextBoxFrame, type BoxGesture } from "./TextBoxFrame";
+import { useBoxPush } from "./useBoxPush";
 
 interface BlockEditorProps {
   docId: string;
   edit: ActiveEdit;
   zoom: number;
-  obstacles: { id: string; bbox: Rect }[]; // other text on the page
+  obstacles: { id: string; bbox: Rect }[]; // other text on the page (snapping)
   candidates: PushCandidate[]; // what could move below the box
   renderSrc: string | null;
   pageSize: [number, number];
@@ -30,14 +31,19 @@ interface BoxLayout {
 }
 
 const round2 = (value: number) => Math.round(value * 100) / 100;
+const DOUBLE_PRESS_MS = 450;
 
-/** Edit a whole text block as a movable, resizable text box. */
+/**
+ * A text box, Canva-style. Selected: drag to move, side handles set the width,
+ * corners scale the text, arrows nudge, Delete removes, Enter or a double-click
+ * starts typing. Moving alone keeps the text exactly as it is (mixed styles too).
+ */
 export function BlockEditor({ docId, edit, zoom, obstacles, candidates, renderSrc, pageSize }: BlockEditorProps) {
-  const pageWidth = pageSize[0];
   const { span, draft, page } = edit;
   const original = edit.blockBbox ?? span.bbox;
   const geometry = edit.box ?? AUTO_BOX;
   const initial = edit.blockText ?? span.text;
+  const typing = edit.typing ?? true;
   const [text, setText] = useState(initial);
   const [family, setFamily] = useState(cssFamily(span.face, span));
   const [rows, setRows] = useState(edit.lineCount ?? 1);
@@ -47,6 +53,8 @@ export function BlockEditor({ docId, edit, zoom, obstacles, candidates, renderSr
     [obstacles, pageSize[0], pageSize[1]],
   );
   const ref = useRef<HTMLTextAreaElement>(null);
+  const frameRef = useRef<HTMLDivElement>(null);
+  const lastPress = useRef(edit.pressedAt ?? 0);
   const textRef = useRef(text);
   textRef.current = text;
   const run = useEditor((s) => s.run);
@@ -62,12 +70,20 @@ export function BlockEditor({ docId, edit, zoom, obstacles, candidates, renderSr
     };
   }, [faceId, span.serif]);
 
+  // Typing focuses the text (caret at the end); selected focuses the frame for keys.
   useLayoutEffect(() => {
-    const area = ref.current;
-    if (!area) return;
-    area.focus();
-    area.setSelectionRange(area.value.length, area.value.length);
-  }, []);
+    if (typing) {
+      const area = ref.current;
+      area?.focus();
+      area?.setSelectionRange(area.value.length, area.value.length);
+    } else {
+      frameRef.current?.focus({ preventScroll: true });
+    }
+  }, [typing]);
+
+  const restyled = draftChanged(span, draft) || edit.align !== "left" || !!edit.lineHeight || geometry.width !== null;
+  // Untouched text is shown as its real pixels; once retyped or restyled, as live text.
+  const pixels = !typing && text === initial && !restyled;
 
   const fontCss = `${draft.italic ? "italic " : ""}${draft.bold ? 700 : 400} ${draft.size}px ${family}`;
   const moved: Rect = [original[0] + geometry.dx, original[1] + geometry.dy, original[2] + geometry.dx, original[3] + geometry.dy];
@@ -75,14 +91,11 @@ export function BlockEditor({ docId, edit, zoom, obstacles, candidates, renderSr
     if (geometry.width !== null) {
       return { box: { x: moved[0], width: geometry.width }, maxWidth: geometry.width, auto: false };
     }
-    const free = freeSpan(moved, obstacles, null, { width: pageWidth });
-    // A little slack: browser and PDF metrics differ slightly.
-    const natural = naturalWidth(text, fontCss) + Math.max(2, draft.size * 0.25);
-    return {
-      box: autoBox(moved, natural, free, edit.align),
-      maxWidth: autoBox(moved, Infinity, free, edit.align).width,
-      auto: true,
-    };
+    if (pixels) return { box: { x: moved[0], width: original[2] - original[0] }, maxWidth: pageSize[0], auto: true };
+    // No limits: the box may grow up to the page edge (snapping guides help align it).
+    const free = { left: 0, right: pageSize[0] };
+    const natural = naturalWidth(text, fontCss) + Math.max(2, draft.size * 0.25); // metric slack
+    return { box: autoBox(moved, natural, free, edit.align), maxWidth: autoBox(moved, Infinity, free, edit.align).width, auto: true };
   })();
   const layoutRef = useRef(layout);
   layoutRef.current = layout;
@@ -98,53 +111,19 @@ export function BlockEditor({ docId, edit, zoom, obstacles, candidates, renderSr
     area.style.height = "auto";
     const content = area.scrollHeight;
     area.style.height = `${Math.max(content, minHeight)}px`;
-    setRows(Math.max(1, Math.round(content / (step * zoom))));
+    if (!pixels) setRows(Math.max(1, Math.round(content / (step * zoom))));
   });
 
-  // Content below: how far it moves and what moves (previewed live, sent on apply).
-  const push = edit.push ?? DEFAULT_PUSH;
-  const growth = boxGrowth({
-    rows,
-    lines: edit.lineCount ?? 1,
-    step,
-    originalStep: edit.lineStep ?? span.size * 1.2,
-    size: draft.size,
-    originalSize: span.size,
-  });
-  const pushDy = push.enabled ? Math.round(((push.follow ? growth : Math.max(0, growth)) + push.extra) * 100) / 100 : 0;
   const columnX: [number, number] = [Math.min(original[0], layout.box.x), Math.max(original[2], layout.box.x + layout.box.width)];
-  const selection = useMemo(
-    () => selectPush(candidates, original, columnX, push, { width: pageSize[0], height: pageSize[1] }),
-    [candidates, original, columnX[0], columnX[1], push.scope, push.overrides, pageSize[0], pageSize[1]],
-  );
-  const pushRef = useRef({ dy: pushDy, items: selection.moving });
-  pushRef.current = { dy: pushDy, items: selection.moving };
-  const offPage = selection.moving.filter((m) => m.bbox[3] + pushDy > pageSize[1]).length;
-  const conflicts = useMemo(() => pushConflicts(selection.moving, selection.kept, pushDy), [selection, pushDy]);
-  const info =
-    Math.abs(pushDy) < 0.05
-      ? { count: 0, dy: 0, offPage: 0, conflicts: 0 }
-      : { count: selection.moving.length, dy: pushDy, offPage, conflicts: conflicts.length };
+  const push = useBoxPush({ edit, original, columnX, rows: pixels ? edit.lineCount ?? 1 : rows, step, candidates, pageSize });
+
   const boxInfo = { x: round2(layout.box.x), y: round2(moved[1]), width: round2(layout.box.width), auto: layout.auto };
   useEffect(() => {
-    const currentBox = useEditor.getState().activeEdit?.boxInfo;
-    if (!currentBox || (Object.keys(boxInfo) as (keyof typeof boxInfo)[]).some((k) => currentBox[k] !== boxInfo[k])) {
+    const current = useEditor.getState().activeEdit?.boxInfo;
+    if (!current || (Object.keys(boxInfo) as (keyof typeof boxInfo)[]).some((k) => current[k] !== boxInfo[k])) {
       patchEdit({ boxInfo });
     }
   });
-  useEffect(() => {
-    const current = useEditor.getState().activeEdit?.pushInfo;
-    const changed = !current || (Object.keys(info) as (keyof typeof info)[]).some((k) => current[k] !== info[k]);
-    if (changed) {
-      patchEdit({ pushInfo: info });
-    }
-  });
-
-  const pushPayload = () => {
-    const { dy, items } = pushRef.current;
-    if (Math.abs(dy) < 0.05 || !items.length) return null;
-    return { dy, items: items.map((i) => ({ kind: i.kind, bbox: i.bbox, xref: i.xref ?? 0 })) };
-  };
 
   const commit = useCallback(async () => {
     registerCommit(null);
@@ -153,9 +132,16 @@ export function BlockEditor({ docId, edit, zoom, obstacles, candidates, renderSr
     const { box: hbox, maxWidth, auto } = layoutRef.current;
     setActiveEdit(null);
     const value = textRef.current;
-    const geometryChanged = box.dx !== 0 || box.dy !== 0 || box.width !== null || pushPayload() !== null;
-    const unchanged = value === initial && latest.align === "left" && !latest.lineHeight && !geometryChanged;
-    if (unchanged && !draftChanged(span, latest.draft)) return;
+    const pushed = push.payload();
+    const changedStyle = draftChanged(span, latest.draft) || latest.align !== "left" || !!latest.lineHeight || box.width !== null;
+    if (value === initial && !changedStyle && !pushed) {
+      if (!box.dx && !box.dy) return;
+      // Only moved: move the lines exactly as they are (fonts, mixed styles, decorations).
+      const to: Rect = [original[0] + box.dx, original[1] + box.dy, original[2] + box.dx, original[3] + box.dy];
+      const items = (latest.boxLines ?? [original]).map((bbox) => ({ kind: "text", bbox }));
+      await run(() => api.transformObjects(docId, { page, items, from_rect: original, to_rect: to }));
+      return;
+    }
     const report = await run(() =>
       api.editBlock(docId, {
         page,
@@ -168,11 +154,11 @@ export function BlockEditor({ docId, edit, zoom, obstacles, candidates, renderSr
         max_width: auto ? round2(maxWidth) : null,
         dx: round2(hbox.x - original[0]),
         dy: round2(box.dy),
-        push: pushPayload(),
+        push: pushed,
       }),
     );
     reportEdit(report);
-  }, [docId, page, original, span, initial, edit, run, setActiveEdit]);
+  }, [docId, page, original, span, initial, edit, run, setActiveEdit, push]);
 
   useEffect(() => {
     registerCommit(commit);
@@ -184,13 +170,45 @@ export function BlockEditor({ docId, edit, zoom, obstacles, candidates, renderSr
     setActiveEdit(null);
   };
 
-  const onGesture = (gesture: BoxGesture) => {
+  const remove = async () => {
+    registerCommit(null);
+    setActiveEdit(null);
+    const items = (edit.boxLines ?? [original]).map((bbox) => ({ kind: "text", bbox }));
+    await run(() => api.deleteObjects(docId, { page, items }), "Text box deleted");
+  };
+
+  /** Start typing; a box with mixed styles is edited run by run (keeps each run's style). */
+  const startTyping = (at?: Point) => {
+    if (edit.uniform !== false) {
+      patchEdit({ typing: true });
+      return;
+    }
+    const spans = edit.boxSpans ?? [span];
+    const target = (at && spans.find((s) => at[0] >= s.bbox[0] && at[0] <= s.bbox[2] && at[1] >= s.bbox[1] && at[1] <= s.bbox[3])) ?? span;
+    if (geometry.dx || geometry.dy) {
+      void commit(); // apply the move first; the runs are re-read afterwards
+      return;
+    }
+    registerCommit(null);
+    setActiveEdit(beginSpanEdit(page, target));
+  };
+
+  const onGesture = (gesture: BoxGesture, clientX?: number, clientY?: number) => {
+    if (gesture === "move" && !typing && clientX !== undefined) {
+      const now = Date.now();
+      const double = now - lastPress.current < DOUBLE_PRESS_MS;
+      lastPress.current = now;
+      if (double) {
+        const rect = frameRef.current?.parentElement?.getBoundingClientRect();
+        startTyping(rect ? [(clientX - rect.left) / zoom, (clientY! - rect.top) / zoom] : undefined);
+      }
+    }
     const start = useEditor.getState().activeEdit ?? edit;
     const startBox = start.box ?? AUTO_BOX;
     const startLayout = layoutRef.current.box;
     const startSize = start.draft.size;
     const startTop = original[1] + startBox.dy;
-    const height = (ref.current?.offsetHeight ?? 0) / zoom;
+    const height = (frameRef.current?.offsetHeight ?? 0) / zoom;
     const threshold = SNAP_PX / zoom;
     return (dxPx: number, dyPx: number, free: boolean) => {
       const dx = dxPx / zoom;
@@ -225,66 +243,103 @@ export function BlockEditor({ docId, edit, zoom, obstacles, candidates, renderSr
   const setAutoWidth = (auto: boolean) => {
     const { box } = layoutRef.current;
     patchEdit({ box: auto ? { ...geometry, width: null } : { dx: box.x - original[0], dy: geometry.dy, width: box.width } });
-    ref.current?.focus();
   };
 
-  const togglePush = (item: PushCandidate, move: boolean) => {
-    const current = useEditor.getState().activeEdit?.push ?? DEFAULT_PUSH;
-    patchEdit({ push: { ...current, overrides: { ...current.overrides, [item.key]: move } } });
-    ref.current?.focus();
+  /** Keys while selected (not typing). */
+  const onFrameKey = (e: KeyboardEvent) => {
+    if (typing) return;
+    e.stopPropagation();
+    const arrow = NUDGE[e.key];
+    if (arrow) {
+      e.preventDefault();
+      const stepSize = e.shiftKey ? 10 : 1;
+      nudge(arrow[0] * stepSize, arrow[1] * stepSize);
+    } else if (e.key === "Delete" || e.key === "Backspace") {
+      e.preventDefault();
+      void remove();
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      startTyping();
+    } else if (e.key === "Escape") {
+      void commit();
+    }
   };
 
   const left = layout.box.x * zoom;
   const top = moved[1] * zoom;
+  const ghost: CSSProperties | null = pixels
+    ? {
+        left: moved[0] * zoom,
+        top: moved[1] * zoom,
+        width: (original[2] - original[0]) * zoom,
+        height: (original[3] - original[1]) * zoom,
+        backgroundImage: renderSrc ? `url(${renderSrc})` : undefined,
+        backgroundSize: `${pageSize[0] * zoom}px ${pageSize[1] * zoom}px`,
+        backgroundPosition: `${-original[0] * zoom}px ${-original[1] * zoom}px`,
+      }
+    : null;
 
   return (
     <>
       <SnapGuides guides={guides} zoom={zoom} />
       <PushPreview
-        selection={selection}
-        conflicts={conflicts}
-        dy={pushDy}
+        selection={push.selection}
+        conflicts={push.conflicts}
+        dy={push.dy}
         zoom={zoom}
         renderSrc={renderSrc}
         pageSize={pageSize}
-        onToggle={togglePush}
+        onToggle={push.toggle}
       />
+      {ghost && <div className="box-ghost" style={ghost} />}
       <div className="edit-chip" style={{ left, top }} onPointerDown={(e) => e.stopPropagation()}>
         <span className="chip-label">Text box</span>
+        {!typing && (
+          <button className="icon-btn small" onClick={() => startTyping()} title="Edit the text (double-click or Enter)">
+            <Pencil size={14} />
+          </button>
+        )}
         <button
           className={`icon-btn small${layout.auto ? " active" : ""}`}
           onClick={() => setAutoWidth(!layout.auto)}
-          title={layout.auto ? "Auto width: grows into free space, then wraps. Click to fix the width." : "Fixed width: text wraps inside the box. Click for auto width."}
+          title={layout.auto ? "Auto width: grows as you type, then wraps at the page edge. Click to fix the width." : "Fixed width: text wraps inside the box. Click for auto width."}
           aria-pressed={layout.auto}
         >
           <MoveHorizontal size={14} />
         </button>
-        <button className="btn small primary" onClick={() => void commit()} title="Apply (Ctrl+Enter)">
+        <button className="btn small primary" onClick={() => void commit()} title="Apply (Ctrl+Enter, or click outside)">
           <Check size={14} /> Apply
         </button>
-        <button className="icon-btn small" onClick={cancel} title="Cancel (Esc)">
+        <button className="icon-btn small" onClick={cancel} title="Discard changes">
           <X size={14} />
         </button>
       </div>
       <TextBoxFrame
+        frameRef={frameRef}
         left={left}
         top={top}
         width={layout.box.width * zoom}
         autoWidth={layout.auto}
+        selected={!typing}
         onGesture={onGesture}
         onGestureEnd={() => {
           setGuides({});
-          ref.current?.focus();
+          // Read the current state: a double-click may have started typing during this gesture.
+          if (useEditor.getState().activeEdit?.typing) ref.current?.focus();
+          else frameRef.current?.focus({ preventScroll: true });
         }}
         onAutoWidth={() => setAutoWidth(true)}
+        onKeyDown={onFrameKey}
       >
         <textarea
           ref={ref}
-          className="block-editor"
+          className={`block-editor${pixels ? " hidden-text" : ""}`}
           value={text}
           rows={1}
           spellCheck={false}
           wrap="soft"
+          readOnly={!typing}
+          tabIndex={typing ? 0 : -1}
           style={{
             fontFamily: family,
             fontSize: draft.size * zoom,
@@ -292,7 +347,7 @@ export function BlockEditor({ docId, edit, zoom, obstacles, candidates, renderSr
             fontStyle: draft.italic ? "italic" : "normal",
             lineHeight: `${step * zoom}px`,
             color: draft.color,
-            opacity: Math.max(draft.opacity, 0.35),
+            opacity: pixels ? 0 : Math.max(draft.opacity, 0.35), // real pixels are shown instead
             textAlign: edit.align,
             textDecoration: [draft.underline && "underline", draft.strike && "line-through"].filter(Boolean).join(" ") || undefined,
           }}
@@ -300,12 +355,12 @@ export function BlockEditor({ docId, edit, zoom, obstacles, candidates, renderSr
           onKeyDown={(e) => {
             e.stopPropagation();
             if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) void commit();
-            if (e.key === "Escape") cancel();
+            if (e.key === "Escape") patchEdit({ typing: false }); // back to "selected"
             const arrow = NUDGE[e.key];
             if (arrow && e.altKey) {
               e.preventDefault();
-              const step = e.shiftKey ? 10 : 1;
-              nudge(arrow[0] * step, arrow[1] * step);
+              const stepSize = e.shiftKey ? 10 : 1;
+              nudge(arrow[0] * stepSize, arrow[1] * stepSize);
             }
           }}
           aria-label="Edit text box"

@@ -176,7 +176,25 @@ def update_annotation(page: fitz.Page, xref: int, style: AnnotStyle, rect: tuple
                      fill_color=hex_to_rgb(style.fill) if style.fill else None)
         return annot.xref
     _apply_style(annot, style, allow_fill)
+    if rect is not None:
+        keep_rect(annot, from_display_rect(page, rect))
     return annot.xref
+
+
+def keep_rect(annot: fitz.Annot, target: fitz.Rect) -> None:
+    """MuPDF grows a box annotation's rect to fit its border on update: compensate,
+    so moving an annotation never makes it bigger."""
+    if annot.type[0] in VERTEX_TYPES:
+        return
+    grown = fitz.Rect(annot.rect)
+    grow = (target.x0 - grown.x0, target.y0 - grown.y0, grown.x1 - target.x1, grown.y1 - target.y1)
+    if max(abs(g) for g in grow) < 0.05:
+        return
+    inner = fitz.Rect(target.x0 + grow[0], target.y0 + grow[1], target.x1 - grow[2], target.y1 - grow[3])
+    if inner.is_empty:
+        return
+    annot.set_rect(inner)
+    annot.update()
 
 
 def _move(page: fitz.Page, annot: fitz.Annot, target: fitz.Rect) -> fitz.Annot:

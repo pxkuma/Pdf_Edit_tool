@@ -631,3 +631,66 @@
   right: 0;
   height: 1px;
 }
+
+/* Selected text box (not typing): the whole box drags; its real pixels are shown */
+.tbox.selected .tbox-move {
+  inset: -8px;
+  z-index: 2;
+}
+
+.tbox:focus {
+  outline-color: var(--accent);
+}
+
+.block-editor.hidden-text {
+  opacity: 0;
+}
+
+.box-ghost {
+  position: absolute;
+  z-index: 19;
+  pointer-events: none;
+  background-repeat: no-repeat;
+}
+
+/* Grabbable objects in edit mode: text boxes, images, vector graphics */
+.obj-hit {
+  position: absolute;
+  cursor: move;
+}
+
+.obj-hit:hover {
+  outline: 1px solid rgb(26 95 180 / 0.6);
+  background: rgb(26 95 180 / 0.05);
+}
+
+.obj-hit.text {
+  cursor: default;
+}
+
+.obj-hit.ocr:hover {
+  outline-color: rgb(178 106 0 / 0.7);
+}
+
+.obj-frame {
+  position: absolute;
+  z-index: 18;
+  outline: 1px solid var(--accent);
+  cursor: move;
+}
+
+.obj-frame:focus {
+  outline: 1px solid var(--accent);
+}
+
+.obj-cover {
+  position: absolute;
+  z-index: 16;
+}
+
+.obj-ghost {
+  position: absolute;
+  z-index: 17;
+  pointer-events: none;
+  background-repeat: no-repeat;
+}

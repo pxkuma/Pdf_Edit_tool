@@ -100,3 +100,23 @@ def test_bold_twice_does_not_thicken(client, doc):
     _edit(client, doc["id"], "Hello world", "Hello world again")  # bold unchanged (not sent)
     second = _span(client, doc["id"], "Hello world")
     assert second["bold"] is True and second["renderMode"] == first["renderMode"]
+
+
+def test_opacity_can_be_restored_to_full(client, doc):
+    _edit(client, doc["id"], "Hello world", opacity=0.5)
+    assert abs(_span(client, doc["id"], "Hello world")["opacity"] - 0.5) < 0.02
+    _edit(client, doc["id"], "Hello world", opacity=1.0)
+    assert _span(client, doc["id"], "Hello world")["opacity"] > 0.99
+
+
+def test_edited_text_shows_a_readable_font_name(client, doc):
+    _edit(client, doc["id"], "Hello world", "Hello wörld Ω")  # forces a fallback font for Ω
+    _edit(client, doc["id"], "Hello", bold=True, font="face:" + _face_id(client, "Liberation Serif"))
+    span = _span(client, doc["id"], "Hello")
+    assert not span["font"].startswith("PSF"), span["font"]
+    assert "Liberation Serif" in span["font"]
+
+
+def _face_id(client, family):
+    families = client.get("/api/fonts").json()["data"]["families"]
+    return next(f for f in families if f["family"] == family)["faces"][0]["id"]

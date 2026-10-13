@@ -144,6 +144,12 @@ export const api = {
       push?: { dy: number; items: { kind: string; bbox: Rect; xref?: number }[] } | null;
     },
   ): Mut<EditReport> => request("POST", `${doc(id)}/text/block`, body),
+  transformObjects: (
+    id: string,
+    body: { page: number; items: { kind: string; bbox: Rect; xref?: number }[]; from_rect: Rect; to_rect: Rect },
+  ): Mut<EditReport> => request("POST", `${doc(id)}/objects/transform`, body),
+  deleteObjects: (id: string, body: { page: number; items: { kind: string; bbox: Rect; xref?: number }[] }): Mut =>
+    request("POST", `${doc(id)}/objects/delete`, body),
   addText: (
     id: string,
     body: {
