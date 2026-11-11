@@ -14,7 +14,7 @@ from dataclasses import dataclass, field, replace
 
 import pymupdf as fitz
 
-from . import fontres, pdfobj
+from . import cmap, fontres, pdfobj
 from .fonts import FontCatalog, FontFace
 
 SPACE_FALLBACK_WIDTH = 250.0  # 1/1000 em, used when no font supplies a space
@@ -211,6 +211,7 @@ def _register_face(doc: fitz.Document, page: fitz.Page, entry: _FaceEntry) -> st
         xref = page.insert_font(fontname=name, fontfile=entry.file)
         fontres.tag_font(doc, xref, face.id)
         _rename_inserted_font(doc, xref, face)
+        _repair_tounicode(doc, xref)
     elif pdfobj.resource_exists(doc, page, "Font", name) is None:
         pdfobj.add_resource(doc, page, "Font", name, f"{xref} 0 R")
     return name
@@ -230,6 +231,18 @@ def _rename_inserted_font(doc: fitz.Document, xref: int, face: FontFace) -> None
     descriptor = pdfobj.ref_xref(pdfobj.get_key(doc, descendant, "FontDescriptor")[1])
     if descriptor is not None:
         doc.xref_set_key(descriptor, "FontName", name)
+
+
+def _repair_tounicode(doc: fitz.Document, xref: int) -> None:
+    """Rewrite MuPDF's ToUnicode when it holds bare code points (``<1f600>``) for
+    characters outside the BMP: viewers read those as the wrong character, so
+    copying, searching and re-editing emoji or CJK Ext-B text would break."""
+    target = pdfobj.ref_xref(pdfobj.get_key(doc, xref, "ToUnicode")[1])
+    if target is None:
+        return
+    text = pdfobj.stream_text(doc, target)
+    if cmap.has_malformed_destinations(text):
+        doc.update_stream(target, cmap.build_tounicode(cmap.parse_tounicode(text), 2).encode("ascii"))
 
 
 def _fmt(value: float) -> str:

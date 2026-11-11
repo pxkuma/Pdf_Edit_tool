@@ -30,6 +30,21 @@ def _hex_to_bytes(value: str) -> bytes:
     return bytes.fromhex(cleaned)
 
 
+def _dest_text(value: str, offset: int = 0) -> str:
+    """Decode a bfchar/bfrange destination (UTF-16BE), plus ``offset`` for ranges.
+
+    UTF-16BE hex always has a multiple of 4 digits. Some producers (MuPDF 1.28
+    among them) write characters outside the BMP as a bare 5- or 6-digit code
+    point such as ``<1f600>``; those are read as code points.
+    """
+    cleaned = re.sub(r"\s", "", value)
+    if len(cleaned) in (5, 6) and re.fullmatch(r"[0-9A-Fa-f]+", cleaned):
+        point = int(cleaned, 16) + offset
+        return chr(point) if point <= 0x10FFFF and not 0xD800 <= point <= 0xDFFF else ""
+    raw = _hex_to_bytes(cleaned)
+    return _utf16_to_str(_increment(raw, offset) if offset else raw)
+
+
 def _utf16_to_str(raw: bytes) -> str:
     if not raw:
         return ""
@@ -64,7 +79,7 @@ def parse_tounicode(cmap_text: str) -> dict[bytes, str]:
     mapping: dict[bytes, str] = {}
     for block in _BFCHAR_BLOCK.findall(cmap_text):
         for src, dst in _BFCHAR_ENTRY.findall(block):
-            text = _utf16_to_str(_hex_to_bytes(dst))
+            text = _dest_text(dst)
             if text:
                 mapping[_hex_to_bytes(src)] = text
     for block in _BFRANGE_BLOCK.findall(cmap_text):
@@ -83,13 +98,13 @@ def _add_range(mapping: dict[bytes, str], lo: bytes, hi: bytes, dst: str) -> Non
         for index, target in enumerate(targets):
             if start + index > end:
                 break
-            text = _utf16_to_str(_hex_to_bytes(target))
+            text = _dest_text(target)
             if text:
                 mapping[(start + index).to_bytes(width, "big")] = text
         return
-    base = _hex_to_bytes(dst.strip("<>"))
+    base = dst.strip("<>")
     for offset in range(end - start + 1):
-        text = _utf16_to_str(_increment(base, offset))
+        text = _dest_text(base, offset)
         if text:
             mapping[(start + offset).to_bytes(width, "big")] = text
 
@@ -132,3 +147,60 @@ def simple_encoding_map(base_name: str, differences: str | None) -> dict[bytes, 
 
 def glyph_table_to_map(names: encodings.GlyphTable) -> dict[bytes, str]:
     return {bytes([code]): text for code, text in encodings.to_unicode_table(names).items()}
+
+
+_CMAP_HEADER = (
+    "/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n"
+    "/CIDSystemInfo <</Registry(Adobe)/Ordering(UCS)/Supplement 0>> def\n"
+    "/CMapName /Adobe-Identity-UCS def\n/CMapType 2 def\n"
+)
+_CMAP_FOOTER = "endcmap\nCMapName currentdict /CMap defineresource pop\nend\nend\n"
+_CMAP_CHUNK = 100  # entries per bfchar/bfrange section (PDF limit)
+
+
+def _utf16_hex(text: str) -> str:
+    return text.encode("utf-16-be").hex().upper()
+
+
+def _continues(code: bytes, text: str, prev_code: bytes, prev_text: str) -> bool:
+    """Whether (code, text) extends a bfrange: only the last byte of both increments."""
+    if code[:-1] != prev_code[:-1] or code[-1] != prev_code[-1] + 1:
+        return False
+    a, b = prev_text.encode("utf-16-be"), text.encode("utf-16-be")
+    return len(a) == len(b) and a[:-1] == b[:-1] and b[-1] == a[-1] + 1
+
+
+def build_tounicode(mapping: dict[bytes, str], code_bytes: int = 2) -> str:
+    """A ToUnicode CMap for ``mapping`` (UTF-16BE destinations, surrogate pairs included)."""
+    runs: list[list[tuple[bytes, str]]] = []
+    for code, text in sorted(mapping.items()):
+        if len(code) != code_bytes or not text:
+            continue
+        if runs and _continues(code, text, *runs[-1][-1]):
+            runs[-1].append((code, text))
+        else:
+            runs.append([(code, text)])
+    singles = [run[0] for run in runs if len(run) == 1]
+    ranges = [run for run in runs if len(run) > 1]
+    digits = 2 * code_bytes
+    parts = [_CMAP_HEADER, f"1 begincodespacerange\n<{'0' * digits}> <{'F' * digits}>\nendcodespacerange\n"]
+    for pos in range(0, len(ranges), _CMAP_CHUNK):
+        chunk = ranges[pos:pos + _CMAP_CHUNK]
+        body = "\n".join(f"<{r[0][0].hex().upper()}> <{r[-1][0].hex().upper()}> <{_utf16_hex(r[0][1])}>" for r in chunk)
+        parts.append(f"{len(chunk)} beginbfrange\n{body}\nendbfrange\n")
+    for pos in range(0, len(singles), _CMAP_CHUNK):
+        chunk = singles[pos:pos + _CMAP_CHUNK]
+        body = "\n".join(f"<{code.hex().upper()}> <{_utf16_hex(text)}>" for code, text in chunk)
+        parts.append(f"{len(chunk)} beginbfchar\n{body}\nendbfchar\n")
+    parts.append(_CMAP_FOOTER)
+    return "".join(parts)
+
+
+def has_malformed_destinations(cmap_text: str) -> bool:
+    """True when a destination is not valid UTF-16BE hex (e.g. a bare code point)."""
+    for block in _BFCHAR_BLOCK.findall(cmap_text) + _BFRANGE_BLOCK.findall(cmap_text):
+        for value in re.findall(_HEX, block):
+            digits = len(re.sub(r"\s", "", value))
+            if digits % 2 or digits == 6:
+                return True
+    return False
