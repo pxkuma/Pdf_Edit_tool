@@ -18,24 +18,30 @@ def ok(data: Any = None) -> dict:
 
 
 def doc_info(state: DocState) -> dict:
+    """Describe the document as one consistent snapshot.
+
+    Another request (a second tab, a finishing OCR job) can land between a mutation and this call, so
+    ``state`` only names the document: pages, tokens, cursor and history all come from the version that
+    is current while the lock is held.
+    """
     with PDF_LOCK:
-        _state, doc = deps.store().open_current(state.id)
+        latest, doc = deps.store().open_current(state.id)
         pages = page_info(doc)
         metadata_title = (doc.metadata or {}).get("title", "")
         has_forms = bool(doc.is_form_pdf)
-    for page, token in zip(pages, state.current.tokens):
+    for page, token in zip(pages, latest.current.tokens):
         page["token"] = token
     return {
-        "id": state.id,
-        "filename": state.filename,
+        "id": latest.id,
+        "filename": latest.filename,
         "title": metadata_title,
         "pages": pages,
-        "version": state.current.file,
-        "canUndo": state.can_undo,
-        "canRedo": state.can_redo,
-        "cursor": state.cursor,
-        "history": [{"label": v.label, "ts": v.ts} for v in state.versions],
-        "wasEncrypted": state.was_encrypted,
+        "version": latest.current.file,
+        "canUndo": latest.can_undo,
+        "canRedo": latest.can_redo,
+        "cursor": latest.cursor,
+        "history": [{"label": v.label, "ts": v.ts} for v in latest.versions],
+        "wasEncrypted": latest.was_encrypted,
         "hasForms": has_forms,
     }
 

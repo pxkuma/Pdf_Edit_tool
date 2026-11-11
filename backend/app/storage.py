@@ -123,21 +123,24 @@ def _load_any(data: bytes, password: str | None) -> tuple[fitz.Document, bool]:
         doc = fitz.open(stream=data)
     except Exception as exc:  # noqa: BLE001 - MuPDF raises generic errors
         raise InvalidDocument("This file could not be opened as a PDF or image.") from exc
-    encrypted = False
-    if doc.needs_pass:
-        encrypted = True
-        if not password or not doc.authenticate(password):
+    try:
+        encrypted = False
+        if doc.needs_pass:
+            encrypted = True
+            if not password or not doc.authenticate(password):
+                raise PasswordRequired("This PDF is password protected.")
+        if not doc.is_pdf:
+            try:
+                converted = fitz.open("pdf", doc.convert_to_pdf())
+            except Exception as exc:  # noqa: BLE001
+                raise InvalidDocument("This file type cannot be converted to PDF.") from exc
             doc.close()
-            raise PasswordRequired("This PDF is password protected.")
-    if not doc.is_pdf:
-        try:
-            converted = fitz.open("pdf", doc.convert_to_pdf())
-        except Exception as exc:  # noqa: BLE001
-            raise InvalidDocument("This file type cannot be converted to PDF.") from exc
-        doc.close()
-        doc = converted
-    if doc.page_count == 0:
-        raise InvalidDocument("The document has no pages.")
+            doc = converted
+        if doc.page_count == 0:
+            raise InvalidDocument("The document has no pages.")
+    except BaseException:
+        doc.close()  # never leave a half-opened handle behind
+        raise
     return doc, encrypted
 
 
@@ -311,12 +314,14 @@ class DocumentStore:
             return new_state
 
     def undo(self, doc_id: str) -> DocState:
-        state = self.get(doc_id)
-        return self.jump(doc_id, state.cursor - 1) if state.can_undo else state
+        with PDF_LOCK:  # read the cursor and move it in one step, or two undos can step back only once
+            state = self.get(doc_id)
+            return self.jump(doc_id, state.cursor - 1) if state.can_undo else state
 
     def redo(self, doc_id: str) -> DocState:
-        state = self.get(doc_id)
-        return self.jump(doc_id, state.cursor + 1) if state.can_redo else state
+        with PDF_LOCK:
+            state = self.get(doc_id)
+            return self.jump(doc_id, state.cursor + 1) if state.can_redo else state
 
 
 def _next_tokens(old: tuple[str, ...], old_count: int, new_count: int, mutation: Mutation) -> tuple[str, ...]:

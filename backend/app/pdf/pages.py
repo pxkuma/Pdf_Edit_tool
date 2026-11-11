@@ -45,8 +45,24 @@ def reorder(doc: fitz.Document, order: list[int]) -> Mutation:
         raise PageError("A document must keep at least one page.")
     if any(not 0 <= index < doc.page_count for index in order):
         raise PageError("Page number out of range.")
-    doc.select(order)
-    return Mutation(changed=frozenset(), page_map=tuple(order))
+    doc.select(_independent_selection(doc, order))
+    repeats = frozenset(position for position, index in enumerate(order) if index in order[:position])
+    return Mutation(changed=repeats, page_map=tuple(order))
+
+
+def _independent_selection(doc: fitz.Document, order: list[int]) -> list[int]:
+    """``Document.select`` lets a repeated index share one page object, so editing one copy would change
+    the other. Every repeat gets its own physical copy (appended at the end, then selected)."""
+    seen: set[int] = set()
+    selection = []
+    for index in order:
+        if index in seen:
+            doc.fullcopy_page(index, -1)
+            selection.append(doc.page_count - 1)
+        else:
+            seen.add(index)
+            selection.append(index)
+    return selection
 
 
 def delete(doc: fitz.Document, pages: list[int]) -> Mutation:
@@ -116,10 +132,14 @@ def insert_pdf(doc: fitz.Document, payload: bytes, at: int, from_page: int | Non
 def insert_image_page(doc: fitz.Document, image: bytes, at: int) -> Mutation:
     try:
         img_doc = fitz.open(stream=image)
-        pdf_bytes = img_doc.convert_to_pdf()
-        img_doc.close()
     except Exception as exc:  # noqa: BLE001
         raise PageError("The image could not be read.") from exc
+    try:
+        pdf_bytes = img_doc.convert_to_pdf()
+    except Exception as exc:  # noqa: BLE001
+        raise PageError("The image could not be read.") from exc
+    finally:
+        img_doc.close()
     return insert_pdf(doc, pdf_bytes, at)
 
 

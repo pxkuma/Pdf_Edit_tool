@@ -27,6 +27,14 @@ class Job:
     result: Any = None
     document: dict | None = None
     created: float = field(default_factory=time.time)
+    _progress_lock: threading.Lock = field(default_factory=threading.Lock, repr=False, compare=False)
+
+    def advance(self, message: str = "") -> None:
+        """Count one finished unit of work. Safe to call from the worker pool's threads."""
+        with self._progress_lock:
+            self.done += 1
+            if message:
+                self.message = message
 
     def to_json(self) -> dict:
         return {
