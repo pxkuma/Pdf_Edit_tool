@@ -90,4 +90,4 @@ Layout: `backend/app/pdf/` holds the PDF engine (font analysis, content-stream i
 - OCR replacement text uses a matching installed font (sans-serif by default, bold detected). The scanned typeface itself can't be reproduced, so you can pick another font in Properties.
 - Paragraph mode rewrites the paragraph in one style. Use word/line editing to keep mixed bold/italic inside a line.
 - Complex scripts that need glyph shaping (e.g. Devanagari conjuncts, Arabic joining) can be inserted but aren't shaped.
-- Deleting, moving or replacing an image affects every place where the *same* image object is reused (the panel shows how many).
+- Replacing an image affects every place where the *same* image object is reused (the panel shows how many). Moving or deleting one only affects its own page.

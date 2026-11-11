@@ -143,7 +143,7 @@ def move_image(doc_id: str, page: int, xref: int, body: schemas.ImageMoveBody) -
     def run(doc):
         pg = check_page(doc, page)
         images.move_image(doc, pg, xref, body.rect)
-        return Mutation(changed=None)  # other pages may share the image
+        return Mutation(changed=frozenset({page}))  # pages sharing the image object are untouched
 
     return mutate(doc_id, "Moved image", run)
 
@@ -163,7 +163,7 @@ async def replace_image(doc_id: str, page: int, xref: int, file: UploadFile = Fi
 def delete_image(doc_id: str, page: int, xref: int) -> dict:
     def run(doc):
         images.delete_image(check_page(doc, page), xref)
-        return Mutation(changed=None)
+        return Mutation(changed=frozenset({page}))  # pages sharing the image object are untouched
 
     return mutate(doc_id, "Deleted image", run)
 

@@ -72,7 +72,7 @@ export function SelectedObjectProps() {
         <h4>Image</h4>
         <div className="note">
           {image.width} × {image.height} px
-          {image.uses > 1 && <div style={{ color: "var(--warning)" }}>Used {image.uses}× in this document — changes apply to every copy.</div>}
+          {image.uses > 1 && <div style={{ color: "var(--warning)" }}>Used {image.uses}× in this document — replacing it changes every copy.</div>}
         </div>
         <button
           className="btn small"
