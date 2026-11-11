@@ -45,6 +45,14 @@ async function parseError(response: Response): Promise<ApiError> {
   }
 }
 
+async function send(url: string, init: RequestInit): Promise<Response> {
+  try {
+    return await fetch(url, init);
+  } catch {
+    throw new ApiError("Cannot reach the PDF Studio server. Is it running?", 0, "network");
+  }
+}
+
 async function request<T>(method: string, url: string, body?: unknown): Promise<T> {
   const init: RequestInit = { method, headers: {} };
   if (body instanceof FormData) {
@@ -53,12 +61,7 @@ async function request<T>(method: string, url: string, body?: unknown): Promise<
     init.body = JSON.stringify(body);
     init.headers = { "Content-Type": "application/json" };
   }
-  let response: Response;
-  try {
-    response = await fetch(url, init);
-  } catch {
-    throw new ApiError("Cannot reach the PDF Studio server. Is it running?", 0, "network");
-  }
+  const response = await send(url, init);
   if (!response.ok) throw await parseError(response);
   const payload = (await response.json()) as Envelope<T>;
   if (!payload.ok) throw new ApiError(payload.error || "Request failed", response.status, payload.code);
@@ -71,7 +74,7 @@ async function download(method: string, url: string, body?: unknown): Promise<{ 
     init.body = JSON.stringify(body);
     init.headers = { "Content-Type": "application/json" };
   }
-  const response = await fetch(url, init);
+  const response = await send(url, init);
   if (!response.ok) throw await parseError(response);
   const disposition = response.headers.get("Content-Disposition") || "";
   const star = /filename\*=UTF-8''([^;]+)/i.exec(disposition);
