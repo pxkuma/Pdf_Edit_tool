@@ -139,11 +139,11 @@ export function ExportDialog({ initialTab = "pdf" }: { initialTab?: Tab }) {
           <div className="grid-2">
             <label className="field">
               <span>Password to open</span>
-              <input className="input" type="password" autoComplete="new-password" value={security.user_password} onChange={(e) => setSecurity({ ...security, user_password: e.target.value })} />
+              <input className="input" type="password" autoComplete="new-password" maxLength={40} value={security.user_password} onChange={(e) => setSecurity({ ...security, user_password: e.target.value })} />
             </label>
             <label className="field">
               <span>Owner password (permissions)</span>
-              <input className="input" type="password" autoComplete="new-password" placeholder="Same as above" value={security.owner_password} onChange={(e) => setSecurity({ ...security, owner_password: e.target.value })} />
+              <input className="input" type="password" autoComplete="new-password" maxLength={40} placeholder="Random (no one can lift the limits)" value={security.owner_password} onChange={(e) => setSecurity({ ...security, owner_password: e.target.value })} />
             </label>
           </div>
           <div className="grid-2">

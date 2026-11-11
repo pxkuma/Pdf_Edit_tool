@@ -3,6 +3,7 @@ import { api } from "../../api/client";
 import type { Point, Rect } from "../../api/types";
 import { flushEdit } from "../../lib/editSession";
 import { cssRect, normRect, rectHeight, rectWidth } from "../../lib/geometry";
+import { removedNote } from "../../lib/redaction";
 import { useEditor, type Tool } from "../../store/editor";
 import { NewTextEditor } from "./NewTextEditor";
 import { ToolPopover, type PopoverState } from "./ToolPopover";
@@ -37,7 +38,7 @@ export function DrawLayer({ docId, page, zoom, tool, pageSize, pageRef, snapRect
   const [popover, setPopover] = useState<PopoverState | null>(null);
   const [newText, setNewText] = useState<{ x: number; y: number; width: number | null } | null>(null);
   const drawing = useRef(false);
-  const { run, ink, shape, redactColor, placement, setPlacement, setTool } = useEditor();
+  const { run, toast, ink, shape, redactColor, redactSanitize, placement, setPlacement, setTool } = useEditor();
 
   useEffect(() => {
     setPopover(null);
@@ -133,7 +134,8 @@ export function DrawLayer({ docId, page, zoom, tool, pageSize, pageRef, snapRect
         const mode = tool === "eraseText" ? "text" : tool;
         const color = tool === "whiteout" ? "#ffffff" : redactColor;
         const label = tool === "redact" ? "Area redacted" : tool === "whiteout" ? "Whiteout applied" : "Text erased";
-        await run(() => api.redact(docId, page, [rect], mode, color), label);
+        const result = await run(() => api.redact(docId, page, [rect], mode, color, redactSanitize));
+        if (result) toast(`${label}${removedNote(result)}`, "success");
         return;
       }
       case "image": {

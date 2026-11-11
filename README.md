@@ -91,4 +91,4 @@ Layout: `backend/app/pdf/` holds the PDF engine (font analysis, content-stream i
 - Paragraph mode rewrites the paragraph in one style. Use word/line editing to keep mixed bold/italic inside a line.
 - Complex scripts that need glyph shaping (e.g. Devanagari conjuncts, Arabic joining) can be inserted but aren't shaped, and right-to-left text (Hebrew, Arabic) is written in typing order, so it reads reversed.
 - Vertical (top-to-bottom) CJK text is rewritten horizontally in a substitute font, and text in fonts with a predefined CJK CMap (e.g. `UniGB-UCS2-H`, `90ms-RKSJ-H`) is always rewritten in a substitute font.
-- Deleting, moving or replacing an image affects every place where the *same* image object is reused (the panel shows how many).
+- Replacing an image affects every place where the *same* image object is reused (the panel shows how many). Moving or deleting one only affects its own page.

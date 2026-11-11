@@ -228,6 +228,14 @@ export interface OcrCapabilities {
   default: string | null;
 }
 
+/** What a redaction also removed (comments, form fields and links under the area). */
+export interface RedactResult {
+  annotations: number;
+  fields: number;
+  links: number;
+  sanitized: boolean;
+}
+
 export interface Job<T = unknown> {
   id: string;
   docId: string;

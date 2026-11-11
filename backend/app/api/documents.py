@@ -4,11 +4,15 @@ from __future__ import annotations
 
 import io
 import re
+import tempfile
 import zipfile
+from collections.abc import Iterable
+from typing import BinaryIO
 from urllib.parse import quote
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
-from fastapi.responses import Response
+from fastapi.responses import Response, StreamingResponse
+from starlette.concurrency import run_in_threadpool
 
 from .. import deps
 from ..pdf import doctools, textedit
@@ -21,10 +25,33 @@ from .common import doc_info, mutate, ok, read_upload
 router = APIRouter(prefix="/api")
 
 
-def _download(data: bytes, filename: str, media_type: str) -> Response:
+_SPOOL_BYTES = 32 * 1024 * 1024  # archives bigger than this are spooled to disk while they are built
+_CHUNK_BYTES = 1024 * 1024
+
+
+def _disposition(filename: str) -> dict[str, str]:
     safe = re.sub(r'[^\w\-. ()]+', "_", filename) or "download"
-    headers = {"Content-Disposition": f"attachment; filename=\"{safe}\"; filename*=UTF-8''{quote(filename)}"}
-    return Response(content=data, media_type=media_type, headers=headers)
+    return {"Content-Disposition": f"attachment; filename=\"{safe}\"; filename*=UTF-8''{quote(filename)}"}
+
+
+def _download(data: bytes, filename: str, media_type: str) -> Response:
+    return Response(content=data, media_type=media_type, headers=_disposition(filename))
+
+
+def _download_spooled(spool: BinaryIO, filename: str, media_type: str) -> StreamingResponse:
+    """Send a (possibly large) temporary file in chunks and close it afterwards."""
+    size = spool.seek(0, 2)
+    spool.seek(0)
+
+    def chunks():
+        try:
+            while block := spool.read(_CHUNK_BYTES):
+                yield block
+        finally:
+            spool.close()
+
+    headers = {**_disposition(filename), "Content-Length": str(size)}
+    return StreamingResponse(chunks(), media_type=media_type, headers=headers)
 
 
 def _stem(filename: str) -> str:
@@ -39,11 +66,28 @@ def _zip(files: list[tuple[str, bytes]]) -> bytes:
     return buffer.getvalue()
 
 
+def _zip_spooled(files: Iterable[tuple[str, bytes]]) -> BinaryIO:
+    """Zip files as they are produced into a temp file. Images are compressed already, so they are stored."""
+    spool = tempfile.SpooledTemporaryFile(max_size=_SPOOL_BYTES)
+    try:
+        with zipfile.ZipFile(spool, "w", zipfile.ZIP_STORED) as archive:
+            for name, data in files:
+                archive.writestr(name, data)
+    except BaseException:
+        spool.close()
+        raise
+    return spool
+
+
 @router.post("/documents")
 async def upload(file: UploadFile = File(...), password: str | None = Form(None)) -> dict:
     data = await read_upload(file, deps.settings().max_upload_bytes, "file")
-    state = deps.store().create(file.filename or "document.pdf", data, password)
-    return ok(doc_info(state))
+    filename = file.filename or "document.pdf"
+
+    def create() -> dict:
+        return ok(doc_info(deps.store().create(filename, data, password)))
+
+    return await run_in_threadpool(create)  # MuPDF and the global lock must not run on the event loop
 
 
 @router.get("/documents/{doc_id}")
@@ -106,11 +150,12 @@ def export_images(doc_id: str, body: schemas.ExportImagesBody) -> Response:
         pages = doctools.resolve_pages(doc, body.pages)
         if len(pages) > 500:
             raise HTTPException(status_code=400, detail="Export at most 500 pages as images at once.")
-        files = doctools.page_images(doc, pages, body.dpi, body.format)
-    if len(files) == 1:
-        name, data = files[0]
-        return _download(data, f"{_stem(state.filename)}-{name}", "image/png" if body.format == "png" else "image/jpeg")
-    return _download(_zip(files), f"{_stem(state.filename)}-images.zip", "application/zip")
+        files = doctools.iter_page_images(doc, pages, body.dpi, body.format)
+        if len(pages) == 1:
+            name, data = next(files)
+            return _download(data, f"{_stem(state.filename)}-{name}", "image/png" if body.format == "png" else "image/jpeg")
+        archive = _zip_spooled(files)  # one rendered page in memory at a time
+    return _download_spooled(archive, f"{_stem(state.filename)}-images.zip", "application/zip")
 
 
 @router.post("/documents/{doc_id}/export/extract")

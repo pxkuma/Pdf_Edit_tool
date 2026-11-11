@@ -175,12 +175,14 @@ class RedactBody(BaseModel):
     rects: list[Rect] = Field(min_length=1, max_length=1000)
     mode: Literal["redact", "whiteout", "text"] = "redact"
     color: str = Field("#000000", pattern=HEX_COLOR)
+    sanitize: bool = False  # also remove metadata, XMP, bookmarks, attachments and scripts
 
 
 class RedactSearchBody(BaseModel):
     query: str = Field(min_length=1, max_length=500)
     pages: str | None = Field(None, max_length=500)
     color: str = Field("#000000", pattern=HEX_COLOR)
+    sanitize: bool = False  # also remove metadata, XMP, bookmarks, attachments and scripts
 
 
 class StampStyleBody(BaseModel):
@@ -259,8 +261,8 @@ class ExportBody(BaseModel):
     image_quality: int = Field(75, ge=10, le=95)
     flatten_annotations: bool = False
     flatten_forms: bool = False
-    user_password: str = Field("", max_length=128)
-    owner_password: str = Field("", max_length=128)
+    user_password: str = Field("", max_length=40)  # MuPDF rejects longer passwords
+    owner_password: str = Field("", max_length=40)
     allow_print: bool = True
     allow_copy: bool = True
     allow_modify: bool = True

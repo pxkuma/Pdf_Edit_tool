@@ -14,9 +14,9 @@ from .. import deps
 from ..pdf import annots, extract, forms, images, ocr, pages, push
 from ..pdf.fonts import FontFace
 from ..pdf.geometry import to_display_rect
-from ..storage import PDF_LOCK
+from ..storage import PDF_LOCK, DocState
 from . import schemas
-from .common import check_page, mutate, ok, read_upload, single_page
+from .common import amutate, check_page, mutate, ok, read_upload, single_page
 
 router = APIRouter(prefix="/api/documents/{doc_id}")
 
@@ -24,6 +24,9 @@ IMMUTABLE = "public, max-age=31536000, immutable"
 NO_STORE = "no-store"
 _MODEL_CACHE: OrderedDict[tuple[str, str, int], dict] = OrderedDict()
 _MODEL_CACHE_SIZE = 300
+_USAGE_CACHE: OrderedDict[tuple, dict[int, int]] = OrderedDict()
+_USAGE_CACHE_SIZE = 16
+MAX_RENDER_PIXELS = 40_000_000  # a bitmap this big is about 120 MB; larger requests are rendered at a lower zoom
 
 
 def _scale_bucket(scale: float) -> int:
@@ -31,13 +34,20 @@ def _scale_bucket(scale: float) -> int:
     return max(1, min(64, round(scale * 8)))
 
 
+def render_bucket(rect: fitz.Rect, bucket: int) -> int:
+    """Lower a zoom bucket until the rendered bitmap fits in ``MAX_RENDER_PIXELS``."""
+    while bucket > 1 and (rect.width * bucket / 8) * (rect.height * bucket / 8) > MAX_RENDER_PIXELS:
+        bucket -= 1
+    return bucket
+
+
 @router.get("/pages/{index}/render")
 def render(doc_id: str, index: int, scale: float = 1.0, t: str = "") -> Response:
     store = deps.store()
-    bucket = _scale_bucket(scale)
     with PDF_LOCK:
         state, doc = store.open_current(doc_id)
         page = check_page(doc, index)
+        bucket = render_bucket(page.rect, _scale_bucket(scale))
         token = state.current.tokens[index]
         target = store.cache_dir(doc_id) / f"{token}-{bucket}.png"
         if not target.exists():
@@ -55,12 +65,16 @@ def _matrix(bucket: int) -> fitz.Matrix:
 
 
 @router.get("/pages/{index}/model")
-def model(doc_id: str, index: int) -> dict:
+def model(doc_id: str, index: int, t: str = "") -> dict:
+    """The page model of the current revision. With ``t`` the caller names the revision it needs and gets
+    a 409 instead of the model of a different one."""
     store = deps.store()
     with PDF_LOCK:
         state, doc = store.open_current(doc_id)
         page = check_page(doc, index)
         token = state.current.tokens[index]
+        if t and t != token:
+            raise HTTPException(status_code=409, detail="This page has changed. Reload and try again.")
         key = (doc_id, token, deps.catalog().version)
         cached = _MODEL_CACHE.get(key)
         if cached is None:
@@ -68,7 +82,7 @@ def model(doc_id: str, index: int) -> dict:
                 "token": token,
                 "text": _with_faces(extract.page_text_model(page)),
                 "annotations": annots.list_annotations(page),
-                "images": images.list_images(doc, page),
+                "images": images.list_images(doc, page, lambda: _usage_counts(doc_id, state, doc)),
                 "drawings": [to_display_rect(page, r) for r in push.drawing_clusters(page)],
                 "fields": forms.list_fields_on_page(page),
                 "scan": ocr.page_scan_info(page),
@@ -79,6 +93,19 @@ def model(doc_id: str, index: int) -> dict:
         else:
             _MODEL_CACHE.move_to_end(key)
     return ok(cached)
+
+
+def _usage_counts(doc_id: str, state: DocState, doc: fitz.Document) -> dict[int, int]:
+    """How often each image is placed in the document, counted once per version. Caller holds PDF_LOCK."""
+    key = (doc_id, state.current.file, state.current.tokens)
+    counts = _USAGE_CACHE.get(key)
+    if counts is None:
+        counts = _USAGE_CACHE[key] = images.usage_counts(doc)
+        while len(_USAGE_CACHE) > _USAGE_CACHE_SIZE:
+            _USAGE_CACHE.popitem(last=False)
+    else:
+        _USAGE_CACHE.move_to_end(key)
+    return counts
 
 
 _INSERTED = re.compile(r"^PSF([0-9a-f]{8})-")
@@ -157,7 +184,7 @@ async def insert_file(doc_id: str, at: int = Form(...), file: UploadFile = File(
             return pages.insert_image_page(doc, data, at)
         return pages.insert_pdf(doc, data, at)
 
-    return mutate(doc_id, f"Inserted {file.filename or 'file'}", run)
+    return await amutate(doc_id, f"Inserted {file.filename or 'file'}", run)
 
 
 @router.post("/pages/crop")
@@ -190,7 +217,7 @@ async def add_image(doc_id: str, page: int = Form(...), rect: str = Form(...), f
     target = _parse_rect(rect)
 
     operation = single_page(page, lambda _doc, pg: images.insert_image(pg, target, data, keep_proportion))
-    return mutate(doc_id, "Added image", operation)
+    return await amutate(doc_id, "Added image", operation)
 
 
 def _parse_rect(value: str) -> tuple[float, float, float, float]:

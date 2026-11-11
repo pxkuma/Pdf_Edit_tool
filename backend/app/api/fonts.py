@@ -8,6 +8,7 @@ import re
 from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
+from starlette.concurrency import run_in_threadpool
 
 from .. import deps
 from ..pdf import fontlib
@@ -75,7 +76,11 @@ def font_file(face_id: str) -> FileResponse:
 @router.post("")
 async def upload_font(file: UploadFile = File(...)) -> dict:
     data = await read_upload(file, MAX_FONT_BYTES, "font")
-    name = file.filename or "font.ttf"
+    # Disk writes and the font catalog (which scans fonts under its own lock) must not run on the event loop.
+    return await run_in_threadpool(_store_font, file.filename or "font.ttf", data)
+
+
+def _store_font(name: str, data: bytes) -> dict:
     suffix = ".otf" if name.lower().endswith(".otf") or data[:4] == b"OTTO" else ".ttf"
     if data[:4] not in (b"\x00\x01\x00\x00", b"OTTO", b"true"):
         raise HTTPException(status_code=400, detail="Only TrueType (.ttf) and OpenType (.otf) fonts are supported.")

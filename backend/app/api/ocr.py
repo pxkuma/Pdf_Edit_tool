@@ -48,8 +48,7 @@ def _ocr_work(doc_id: str, body: schemas.OcrBody, language: str) -> callable:
                 _state, current = store.open_current(doc_id)
                 png, zoom = ocr.render_for_ocr(current[index], body.dpi)
             lines = ocr.parse_tsv(ocr.run_tesseract(png, language, body.dpi), zoom)
-            job.done += 1
-            job.message = f"Recognised page {index + 1}"
+            job.advance(f"Recognised page {index + 1}")
             return index, lines
 
         with ThreadPoolExecutor(max_workers=OCR_WORKERS) as pool:

@@ -14,7 +14,7 @@ from ..pdf.push import PushItem, PushRequest
 from ..pdf.textedit import BlockEdit, NewText, SpanEdit, StyleRequest
 from ..storage import PDF_LOCK, Mutation
 from . import schemas
-from .common import check_page, mutate, ok, read_upload, single_page
+from .common import amutate, check_page, mutate, ok, read_upload, single_page
 
 router = APIRouter(prefix="/api/documents/{doc_id}")
 
@@ -143,7 +143,7 @@ def move_image(doc_id: str, page: int, xref: int, body: schemas.ImageMoveBody) -
     def run(doc):
         pg = check_page(doc, page)
         images.move_image(doc, pg, xref, body.rect)
-        return Mutation(changed=None)  # other pages may share the image
+        return Mutation(changed=frozenset({page}))  # pages sharing the image object are untouched
 
     return mutate(doc_id, "Moved image", run)
 
@@ -156,14 +156,14 @@ async def replace_image(doc_id: str, page: int, xref: int, file: UploadFile = Fi
         images.replace_image(check_page(doc, page), xref, data)
         return Mutation(changed=None)
 
-    return mutate(doc_id, "Replaced image", run)
+    return await amutate(doc_id, "Replaced image", run)
 
 
 @router.delete("/images/{page}/{xref}")
 def delete_image(doc_id: str, page: int, xref: int) -> dict:
     def run(doc):
         images.delete_image(check_page(doc, page), xref)
-        return Mutation(changed=None)
+        return Mutation(changed=frozenset({page}))  # pages sharing the image object are untouched
 
     return mutate(doc_id, "Deleted image", run)
 
@@ -213,14 +213,15 @@ def flatten(doc_id: str, body: schemas.FlattenBody) -> dict:
 @router.post("/redact")
 def redact(doc_id: str, body: schemas.RedactBody) -> dict:
     label = {"redact": "Redacted area", "whiteout": "Whiteout", "text": "Erased text"}[body.mode]
-    operation = single_page(body.page, lambda doc, pg: doctools.redact(doc, pg, list(body.rects), body.mode, body.color))
+    operation = single_page(body.page, lambda doc, pg: doctools.redact(doc, pg, list(body.rects), body.mode, body.color, body.sanitize))
     return mutate(doc_id, label, operation)
 
 
 @router.post("/redact/search")
 def redact_search(doc_id: str, body: schemas.RedactSearchBody) -> dict:
     def run(doc):
-        result = doctools.redact_search(doc, body.query, doctools.resolve_pages(doc, body.pages), body.color)
+        result = doctools.redact_search(doc, body.query, doctools.resolve_pages(doc, body.pages), body.color,
+                                        body.sanitize)
         return Mutation(changed=frozenset(result["pages"]), result=result)
 
     return mutate(doc_id, f"Redacted “{_preview(body.query)}”", run)
@@ -248,7 +249,7 @@ async def image_watermark(doc_id: str, file: UploadFile = File(...), pages: str 
         doctools.image_watermark(doc, targets, data, scale, opacity)
         return Mutation(changed=frozenset(targets))
 
-    return mutate(doc_id, "Added image watermark", run)
+    return await amutate(doc_id, "Added image watermark", run)
 
 
 @router.post("/header-footer")

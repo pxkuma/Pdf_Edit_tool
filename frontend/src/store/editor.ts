@@ -1,6 +1,7 @@
 import { create } from "zustand";
-import { ApiError } from "../api/client";
+import { ApiError, api } from "../api/client";
 import type { DocInfo, MutationResponse, Rect, SearchHit, Span } from "../api/types";
+import { serialized } from "../lib/serialQueue";
 
 export type Tool =
   | "select"
@@ -169,6 +170,7 @@ interface EditorState {
   selectedPages: number[];
   currentPage: number;
   busy: number;
+  heldTool: Tool | null; // the tool to give back when a temporarily held one (Space = pan) is released
   sidebar: SidebarPanel;
   propertiesOpen: boolean;
   dialog: DialogName;
@@ -177,6 +179,7 @@ interface EditorState {
   ink: DrawStyle;
   shape: DrawStyle;
   redactColor: string;
+  redactSanitize: boolean;
   activeEdit: ActiveEdit | null;
   placement: Placement | null;
   searchHits: SearchHit[];
@@ -190,6 +193,8 @@ interface EditorActions {
   setDoc: (doc: DocInfo | null) => void;
   setZoom: (zoom: number, fit?: "width" | "page" | null) => void;
   setTool: (tool: Tool) => void;
+  holdTool: (tool: Tool) => void;
+  releaseTool: () => void;
   select: (selection: Selection) => void;
   setSelectedPages: (pages: number[]) => void;
   setCurrentPage: (page: number) => void;
@@ -201,6 +206,7 @@ interface EditorActions {
   patchInk: (patch: Partial<DrawStyle>) => void;
   patchShape: (patch: Partial<DrawStyle>) => void;
   setRedactColor: (color: string) => void;
+  setRedactSanitize: (sanitize: boolean) => void;
   setActiveEdit: (edit: ActiveEdit | null) => void;
   patchDraft: (patch: Partial<SpanDraft>) => void;
   patchEdit: (patch: Partial<ActiveEdit>) => void;
@@ -213,6 +219,7 @@ interface EditorActions {
   setTextPreset: (text: string | null) => void;
   run: <T>(fn: () => Promise<MutationResponse<T>>, success?: string) => Promise<T | undefined>;
   track: <T>(fn: () => Promise<T>) => Promise<T | undefined>;
+  moveInHistory: (target: "undo" | "redo" | number) => Promise<void>;
 }
 
 const STYLE_KEY = "pdfstudio.styles";
@@ -251,6 +258,7 @@ const defaultStyles = {
   ink: { color: "#e11d48", fill: null, width: 2, opacity: 1, dashed: false } as DrawStyle,
   shape: { color: "#2563eb", fill: null, width: 2, opacity: 1, dashed: false } as DrawStyle,
   redactColor: "#000000",
+  redactSanitize: false,
 };
 
 const savedStyles = readStorage(STYLE_KEY, defaultStyles);
@@ -264,8 +272,8 @@ export function errorMessage(error: unknown): string {
 
 export const useEditor = create<EditorState & EditorActions>((set, get) => {
   const persistStyles = () => {
-    const { newText, markup, ink, shape, redactColor } = get();
-    writeStorage(STYLE_KEY, { newText, markup, ink, shape, redactColor });
+    const { newText, markup, ink, shape, redactColor, redactSanitize } = get();
+    writeStorage(STYLE_KEY, { newText, markup, ink, shape, redactColor, redactSanitize });
   };
 
   return {
@@ -277,6 +285,7 @@ export const useEditor = create<EditorState & EditorActions>((set, get) => {
     selectedPages: [],
     currentPage: 0,
     busy: 0,
+    heldTool: null,
     sidebar: "thumbnails",
     propertiesOpen: true,
     dialog: null,
@@ -285,6 +294,7 @@ export const useEditor = create<EditorState & EditorActions>((set, get) => {
     ink: savedStyles.ink,
     shape: savedStyles.shape,
     redactColor: savedStyles.redactColor,
+    redactSanitize: savedStyles.redactSanitize === true,
     activeEdit: null,
     placement: null,
     searchHits: [],
@@ -314,6 +324,9 @@ export const useEditor = create<EditorState & EditorActions>((set, get) => {
         textPreset: tool === "addText" ? state.textPreset : null,
         placement: tool === "image" ? state.placement : null,
       })),
+    holdTool: (tool) =>
+      set((state) => (state.heldTool ? {} : { heldTool: state.tool, tool })), // unlike setTool: selection and open editor stay
+    releaseTool: () => set((state) => (state.heldTool ? { tool: state.heldTool, heldTool: null } : {})),
     select: (selection) => set({ selection }),
     setSelectedPages: (pages) => set({ selectedPages: pages }),
     setCurrentPage: (page) => set({ currentPage: page }),
@@ -338,6 +351,10 @@ export const useEditor = create<EditorState & EditorActions>((set, get) => {
     },
     setRedactColor: (color) => {
       set({ redactColor: color });
+      persistStyles();
+    },
+    setRedactSanitize: (sanitize) => {
+      set({ redactSanitize: sanitize });
       persistStyles();
     },
     setActiveEdit: (edit) => set({ activeEdit: edit }),
@@ -365,13 +382,32 @@ export const useEditor = create<EditorState & EditorActions>((set, get) => {
     run: async (fn, success) => {
       set((state) => ({ busy: state.busy + 1 }));
       try {
-        const response = await fn();
-        get().setDoc(response.document);
+        // The document is replaced inside the queue, so the next action starts from what this one produced.
+        const response = await serialized(async () => {
+          const result = await fn();
+          get().setDoc(result.document);
+          return result;
+        });
         if (success) get().toast(success, "success");
         return response.result;
       } catch (error) {
         get().toast(errorMessage(error), "error");
         return undefined;
+      } finally {
+        set((state) => ({ busy: Math.max(0, state.busy - 1) }));
+      }
+    },
+    moveInHistory: async (target) => {
+      set((state) => ({ busy: state.busy + 1 }));
+      try {
+        await serialized(async () => {
+          const { doc } = get(); // read when it is this action's turn, not when it was requested
+          if (!doc || (target === "undo" && !doc.canUndo) || (target === "redo" && !doc.canRedo)) return;
+          const info = target === "undo" ? await api.undo(doc.id) : target === "redo" ? await api.redo(doc.id) : await api.jump(doc.id, target);
+          get().setDoc(info);
+        });
+      } catch (error) {
+        get().toast(errorMessage(error), "error");
       } finally {
         set((state) => ({ busy: Math.max(0, state.busy - 1) }));
       }

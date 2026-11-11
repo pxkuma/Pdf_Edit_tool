@@ -5,18 +5,22 @@ from __future__ import annotations
 import datetime as dt
 import math
 import re
+import secrets
+from collections.abc import Iterator
 from dataclasses import dataclass
 
 import pymupdf as fitz
 
-from . import extract
+from . import extract, redaction
 from .fonts import FontCatalog
 from .geometry import from_display_point, from_display_rect, from_display_vector, hex_to_rgb, to_display_rect
-from .textedit import SpanEdit, StyleRequest, TextEditError, edit_span, plan_fonts, redact_areas
+from .redaction import redact_areas
+from .textedit import SpanEdit, StyleRequest, TextEditError, edit_span, plan_fonts
 from .textwriter import PlacedLine, TextStyle, line_width, write_lines
 
 POSITIONS = {"top-left", "top-center", "top-right", "bottom-left", "bottom-center", "bottom-right"}
 METADATA_KEYS = ("title", "author", "subject", "keywords", "creator", "producer")
+MAX_EXPORT_PIXELS = 100_000_000  # one exported page bitmap; larger pages are exported at a lower dpi
 
 
 class ToolError(ValueError):
@@ -172,13 +176,23 @@ def search(doc: fitz.Document, query: str, limit: int = 2000) -> list[dict]:
     return hits
 
 
-def replace_text(doc: fitz.Document, catalog: FontCatalog, query: str, replacement: str,
-                 pages: list[int], match_case: bool, whole_word: bool) -> dict:
+def search_pattern(query: str, match_case: bool, whole_word: bool) -> re.Pattern:
+    """Compile a literal search. Whole-word only guards the ends of the query that are word characters,
+    so queries such as ``C++``, ``$5`` or ``(draft)`` work (``\\b`` never matches next to punctuation)."""
     if not query:
         raise ToolError("Search text is empty.")
-    flags = 0 if match_case else re.IGNORECASE
-    pattern = re.compile((r"\b%s\b" if whole_word else "%s") % re.escape(query), flags)
-    replaced, skipped, changed = 0, 0, set()
+    body = re.escape(query)
+    if whole_word:
+        before = r"(?<!\w)" if re.match(r"\w", query[0]) else ""
+        after = r"(?!\w)" if re.match(r"\w", query[-1]) else ""
+        body = f"{before}{body}{after}"
+    return re.compile(body, 0 if match_case else re.IGNORECASE)
+
+
+def replace_text(doc: fitz.Document, catalog: FontCatalog, query: str, replacement: str,
+                 pages: list[int], match_case: bool, whole_word: bool) -> dict:
+    pattern = search_pattern(query, match_case, whole_word)
+    replaced, skipped, changed, missing = 0, 0, set(), set()
     for index in pages:
         page = doc[index]
         total = len(pattern.findall(page.get_text()))
@@ -186,14 +200,15 @@ def replace_text(doc: fitz.Document, catalog: FontCatalog, query: str, replaceme
         for bbox, origin, text in _spans_matching(page, pattern):
             new_text, count = pattern.subn(lambda _m: replacement, text)
             try:
-                edit_span(doc, page, catalog, SpanEdit(bbox, origin, text, new_text, StyleRequest()))
+                report = edit_span(doc, page, catalog, SpanEdit(bbox, origin, text, new_text, StyleRequest()))
             except TextEditError:
                 continue
+            missing.update(report.missing_chars)
             page_replaced += count
             changed.add(index)
         replaced += page_replaced
         skipped += max(0, total - page_replaced)
-    return {"replaced": replaced, "skipped": skipped, "pages": sorted(changed)}
+    return {"replaced": replaced, "skipped": skipped, "pages": sorted(changed), "missing_chars": sorted(missing)}
 
 
 def _spans_matching(page: fitz.Page, pattern: re.Pattern) -> list[tuple]:
@@ -208,13 +223,20 @@ def _spans_matching(page: fitz.Page, pattern: re.Pattern) -> list[tuple]:
     return result
 
 
-def redact(doc: fitz.Document, page: fitz.Page, rects: list[tuple], mode: str, color: str) -> None:
-    """mode: 'redact' (remove everything, fill), 'whiteout' (remove text, fill), 'text' (remove text only)."""
+def redact(doc: fitz.Document, page: fitz.Page, rects: list[tuple], mode: str, color: str,
+           sanitize: bool = False) -> dict:
+    """mode: 'redact' (remove everything, fill), 'whiteout' (remove text, fill), 'text' (remove text only).
+
+    A true redaction also deletes the comments, form fields and links under the area. With
+    ``sanitize`` the document's metadata, attachments and scripts are removed as well.
+    """
     targets = [from_display_rect(page, r) for r in rects]
     targets = [r for r in targets if not r.is_empty and r.width > 0.5 and r.height > 0.5]
     if not targets:
         raise ToolError("Select an area first.")
+    removed = _no_removals()
     if mode == "redact":
+        removed = redaction.clear_under(page, targets)
         redact_areas(page, targets, fill=hex_to_rgb(color, (0, 0, 0)),
                      images=fitz.PDF_REDACT_IMAGE_PIXELS, graphics=fitz.PDF_REDACT_LINE_ART_REMOVE_IF_TOUCHED)
     elif mode == "whiteout":
@@ -224,21 +246,35 @@ def redact(doc: fitz.Document, page: fitz.Page, rects: list[tuple], mode: str, c
         redact_areas(page, targets, fill=False)
     else:
         raise ToolError("Unknown redaction mode.")
+    return {**removed, "sanitized": _sanitize_if(doc, sanitize)}
 
 
-def redact_search(doc: fitz.Document, query: str, pages: list[int], color: str) -> dict:
+def redact_search(doc: fitz.Document, query: str, pages: list[int], color: str, sanitize: bool = False) -> dict:
     if not query.strip():
         raise ToolError("Search text is empty.")
     count, changed = 0, set()
+    removed = _no_removals()
     for index in pages:
         page = doc[index]
         rects = page.search_for(query)
         if rects:
+            cleared = redaction.clear_under(page, rects)
+            removed = {key: removed[key] + cleared[key] for key in removed}
             redact_areas(page, rects, fill=hex_to_rgb(color, (0, 0, 0)),
                          images=fitz.PDF_REDACT_IMAGE_PIXELS, graphics=fitz.PDF_REDACT_LINE_ART_NONE)
             count += len(rects)
             changed.add(index)
-    return {"redacted": count, "pages": sorted(changed)}
+    return {"redacted": count, "pages": sorted(changed), **removed, "sanitized": _sanitize_if(doc, sanitize)}
+
+
+def _no_removals() -> dict[str, int]:
+    return {"annotations": 0, "fields": 0, "links": 0}
+
+
+def _sanitize_if(doc: fitz.Document, requested: bool) -> bool:
+    if requested:
+        redaction.sanitize(doc)
+    return requested
 
 
 def get_metadata(doc: fitz.Document) -> dict:
@@ -321,7 +357,8 @@ def export_pdf(payload: bytes, options: ExportOptions) -> bytes:
             save_args.update(
                 encryption=fitz.PDF_ENCRYPT_AES_256,
                 user_pw=options.user_password,
-                owner_pw=options.owner_password or options.user_password,
+                # Without a separate owner password the user password would also unlock every restriction.
+                owner_pw=options.owner_password or secrets.token_urlsafe(24),  # 32 chars; MuPDF allows 40
                 permissions=permissions,
             )
         return doc.tobytes(**save_args)
@@ -329,15 +366,23 @@ def export_pdf(payload: bytes, options: ExportOptions) -> bytes:
         doc.close()
 
 
-def page_images(doc: fitz.Document, pages: list[int], dpi: int, fmt: str) -> list[tuple[str, bytes]]:
+def capped_dpi(rect: fitz.Rect, dpi: int) -> int:
+    """The export resolution, lowered for very large pages so one bitmap stays below ``MAX_EXPORT_PIXELS``."""
     dpi = max(36, min(600, dpi))
+    pixels = (rect.width * dpi / 72) * (rect.height * dpi / 72)
+    if pixels > MAX_EXPORT_PIXELS:
+        dpi = int(dpi * math.sqrt(MAX_EXPORT_PIXELS / pixels))
+    return max(36, dpi)
+
+
+def iter_page_images(doc: fitz.Document, pages: list[int], dpi: int, fmt: str) -> Iterator[tuple[str, bytes]]:
+    """Render pages one at a time, so only a single bitmap is in memory."""
     fmt = "jpg" if fmt in ("jpg", "jpeg") else "png"
-    out = []
     for index in pages:
-        pix = doc[index].get_pixmap(dpi=dpi, alpha=False)
+        page = doc[index]
+        pix = page.get_pixmap(dpi=capped_dpi(page.rect, dpi), alpha=False)
         data = pix.tobytes("jpeg", jpg_quality=90) if fmt == "jpg" else pix.tobytes("png")
-        out.append((f"page-{index + 1:04d}.{fmt}", data))
-    return out
+        yield f"page-{index + 1:04d}.{fmt}", data
 
 
 def split(doc: fitz.Document, every: int) -> list[tuple[str, bytes]]:

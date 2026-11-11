@@ -10,6 +10,7 @@ import type {
   Metadata,
   OcrCapabilities,
   MutationResponse,
+  RedactResult,
   PageModel,
   Point,
   Rect,
@@ -44,6 +45,14 @@ async function parseError(response: Response): Promise<ApiError> {
   }
 }
 
+async function send(url: string, init: RequestInit): Promise<Response> {
+  try {
+    return await fetch(url, init);
+  } catch {
+    throw new ApiError("Cannot reach the PDF Studio server. Is it running?", 0, "network");
+  }
+}
+
 async function request<T>(method: string, url: string, body?: unknown): Promise<T> {
   const init: RequestInit = { method, headers: {} };
   if (body instanceof FormData) {
@@ -52,12 +61,7 @@ async function request<T>(method: string, url: string, body?: unknown): Promise<
     init.body = JSON.stringify(body);
     init.headers = { "Content-Type": "application/json" };
   }
-  let response: Response;
-  try {
-    response = await fetch(url, init);
-  } catch {
-    throw new ApiError("Cannot reach the PDF Studio server. Is it running?", 0, "network");
-  }
+  const response = await send(url, init);
   if (!response.ok) throw await parseError(response);
   const payload = (await response.json()) as Envelope<T>;
   if (!payload.ok) throw new ApiError(payload.error || "Request failed", response.status, payload.code);
@@ -70,7 +74,7 @@ async function download(method: string, url: string, body?: unknown): Promise<{ 
     init.body = JSON.stringify(body);
     init.headers = { "Content-Type": "application/json" };
   }
-  const response = await fetch(url, init);
+  const response = await send(url, init);
   if (!response.ok) throw await parseError(response);
   const disposition = response.headers.get("Content-Disposition") || "";
   const star = /filename\*=UTF-8''([^;]+)/i.exec(disposition);
@@ -98,7 +102,8 @@ export const api = {
 
   renderUrl: (id: string, page: number, scale: number, token: string) =>
     `${doc(id)}/pages/${page}/render?scale=${scale}&t=${token}`,
-  pageModel: (id: string, page: number) => request<PageModel>("GET", `${doc(id)}/pages/${page}/model`),
+  pageModel: (id: string, page: number, token = "") =>
+    request<PageModel>("GET", `${doc(id)}/pages/${page}/model${token ? `?t=${encodeURIComponent(token)}` : ""}`),
   fonts: () => request<{ families: FontFamily[]; default: string | null }>("GET", "/api/fonts"),
   fontFileUrl: (faceId: string) => `/api/fonts/${faceId}/file`,
   uploadFont(file: File): Promise<{ id: string; family: string; style: string }> {
@@ -168,7 +173,8 @@ export const api = {
   replace: (
     id: string,
     body: { query: string; replacement: string; pages?: string; match_case: boolean; whole_word: boolean },
-  ): Mut<{ replaced: number; skipped: number; pages: number[] }> => request("POST", `${doc(id)}/text/replace`, body),
+  ): Mut<{ replaced: number; skipped: number; pages: number[]; missing_chars?: string[] }> =>
+    request("POST", `${doc(id)}/text/replace`, body),
 
   addAnnotation: (id: string, body: Record<string, unknown>): Mut<number> => request("POST", `${doc(id)}/annotations`, body),
   updateAnnotation: (id: string, page: number, xref: number, style: AnnotStyle, rect?: Rect | null): Mut =>
@@ -209,10 +215,10 @@ export const api = {
   cropPages: (id: string, pages: number[], rect: Rect): Mut => request("POST", `${doc(id)}/pages/crop`, { pages, rect }),
   resetCrop: (id: string, pages: number[]): Mut => request("POST", `${doc(id)}/pages/reset-crop`, { pages }),
 
-  redact: (id: string, page: number, rects: Rect[], mode: string, color: string): Mut =>
-    request("POST", `${doc(id)}/redact`, { page, rects, mode, color }),
-  redactSearch: (id: string, query: string, pages: string, color: string): Mut<{ redacted: number }> =>
-    request("POST", `${doc(id)}/redact/search`, { query, pages: pages || null, color }),
+  redact: (id: string, page: number, rects: Rect[], mode: string, color: string, sanitize = false): Mut<RedactResult> =>
+    request("POST", `${doc(id)}/redact`, { page, rects, mode, color, sanitize }),
+  redactSearch: (id: string, query: string, pages: string, color: string, sanitize = false): Mut<RedactResult & { redacted: number }> =>
+    request("POST", `${doc(id)}/redact/search`, { query, pages: pages || null, color, sanitize }),
   watermark: (id: string, body: Record<string, unknown>): Mut => request("POST", `${doc(id)}/watermark`, body),
   imageWatermark(id: string, file: File, pages: string, scale: number, opacity: number): Mut {
     const form = new FormData();
