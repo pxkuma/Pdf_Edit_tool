@@ -194,13 +194,3 @@ def build_tounicode(mapping: dict[bytes, str], code_bytes: int = 2) -> str:
         parts.append(f"{len(chunk)} beginbfchar\n{body}\nendbfchar\n")
     parts.append(_CMAP_FOOTER)
     return "".join(parts)
-
-
-def has_malformed_destinations(cmap_text: str) -> bool:
-    """True when a destination is not valid UTF-16BE hex (e.g. a bare code point)."""
-    for block in _BFCHAR_BLOCK.findall(cmap_text) + _BFRANGE_BLOCK.findall(cmap_text):
-        for value in re.findall(_HEX, block):
-            digits = len(re.sub(r"\s", "", value))
-            if digits % 2 or digits == 6:
-                return True
-    return False

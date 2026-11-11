@@ -14,7 +14,7 @@ from dataclasses import dataclass, field, replace
 
 import pymupdf as fitz
 
-from . import cmap, fontres, pdfobj
+from . import fontembed, fontres, pdfobj
 from .fonts import FontCatalog, FontFace
 
 SPACE_FALLBACK_WIDTH = 250.0  # 1/1000 em, used when no font supplies a space
@@ -187,8 +187,23 @@ def line_width(glyphs: list[Glyph], style: TextStyle, space_extra: float = 0.0) 
     return total * scale
 
 
-def register_fonts(doc: fitz.Document, page: fitz.Page, chain: FontChain) -> dict[str, str]:
-    """Make every font used by the chain available as a page resource."""
+def _glyphs_by_key(lines: list[PlacedLine]) -> dict[str, dict[int, tuple[str, float]]]:
+    """Glyph id -> (text, width) of every fallback-face glyph, per font key."""
+    used: dict[str, dict[int, tuple[str, float]]] = {}
+    for line in lines:
+        for glyph in line.glyphs:
+            if glyph.font_key.startswith("s") and glyph.code:
+                used.setdefault(glyph.font_key, {})[int.from_bytes(glyph.code, "big")] = (glyph.char, glyph.width)
+    return used
+
+
+def register_fonts(doc: fitz.Document, page: fitz.Page, chain: FontChain,
+                   lines: list[PlacedLine] | None = None) -> dict[str, str]:
+    """Make every font used by the chain available as a page resource.
+
+    Fallback faces are embedded as subsets holding the glyphs of ``lines``.
+    """
+    used = _glyphs_by_key(lines or [])
     names: dict[str, str] = {}
     for key in sorted(chain.used_keys):
         if key.startswith("e") and chain.embedded is not None:
@@ -199,21 +214,23 @@ def register_fonts(doc: fitz.Document, page: fitz.Page, chain: FontChain) -> dic
         elif key.startswith("s"):
             entry = chain.entry_for_key(key)
             if entry is not None:
-                names[key] = _register_face(doc, page, entry)
+                names[key] = _register_face(doc, page, entry, used.get(key, {}))
     return names
 
 
-def _register_face(doc: fitz.Document, page: fitz.Page, entry: _FaceEntry) -> str:
+def _register_face(doc: fitz.Document, page: fitz.Page, entry: _FaceEntry,
+                   used: dict[int, tuple[str, float]]) -> str:
     face = entry.face
     name = f"PSS{face.id}"
     xref = fontres.find_tagged_font(doc, face.id)
     if xref is None:
-        xref = page.insert_font(fontname=name, fontfile=entry.file)
+        xref = fontembed.insert_face(page, name, entry.file, used)
         fontres.tag_font(doc, xref, face.id)
         _rename_inserted_font(doc, xref, face)
-        _repair_tounicode(doc, xref)
-    elif pdfobj.resource_exists(doc, page, "Font", name) is None:
+        return name
+    if pdfobj.resource_exists(doc, page, "Font", name) is None:
         pdfobj.add_resource(doc, page, "Font", name, f"{xref} 0 R")
+    fontembed.ensure_glyphs(doc, xref, entry.file, used)
     return name
 
 
@@ -231,18 +248,6 @@ def _rename_inserted_font(doc: fitz.Document, xref: int, face: FontFace) -> None
     descriptor = pdfobj.ref_xref(pdfobj.get_key(doc, descendant, "FontDescriptor")[1])
     if descriptor is not None:
         doc.xref_set_key(descriptor, "FontName", name)
-
-
-def _repair_tounicode(doc: fitz.Document, xref: int) -> None:
-    """Rewrite MuPDF's ToUnicode when it holds bare code points (``<1f600>``) for
-    characters outside the BMP: viewers read those as the wrong character, so
-    copying, searching and re-editing emoji or CJK Ext-B text would break."""
-    target = pdfobj.ref_xref(pdfobj.get_key(doc, xref, "ToUnicode")[1])
-    if target is None:
-        return
-    text = pdfobj.stream_text(doc, target)
-    if cmap.has_malformed_destinations(text):
-        doc.update_stream(target, cmap.build_tounicode(cmap.parse_tounicode(text), 2).encode("ascii"))
 
 
 def _fmt(value: float) -> str:
@@ -386,7 +391,7 @@ def write_lines(
     style: TextStyle,
     chain: FontChain,
 ) -> None:
-    font_names = register_fonts(doc, page, chain)
+    font_names = register_fonts(doc, page, chain, lines)
     gstate = opacity_state(doc, page, style.opacity, style.force_opacity)
     content = build_content(page, lines, style, font_names, gstate)
     pdfobj.append_content(doc, page, content)

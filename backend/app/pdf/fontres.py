@@ -110,7 +110,7 @@ def analyze_font(doc: fitz.Document, xref: int, verify: bool = True) -> Embedded
     return None
 
 
-def _tounicode(doc: fitz.Document, xref: int) -> tuple[dict[bytes, str], int | None]:
+def read_tounicode(doc: fitz.Document, xref: int) -> tuple[dict[bytes, str], int | None]:
     kind, value = pdfobj.get_key(doc, xref, "ToUnicode")
     target = pdfobj.ref_xref(value) if kind == "xref" else None
     if target is None:
@@ -131,7 +131,7 @@ def _analyze_type0(doc: fitz.Document, xref: int, base: str, verify: bool = True
     encoding = pdfobj.read_name(doc, xref, "Encoding")
     if encoding not in ("Identity-H", "Identity-V"):
         return None
-    mapping, _ = _tounicode(doc, xref)
+    mapping, _ = read_tounicode(doc, xref)
     descendant = pdfobj.first_array_ref(doc, xref, "DescendantFonts")
     widths: dict[bytes, float] = {}
     default_width = 1000.0
@@ -139,7 +139,7 @@ def _analyze_type0(doc: fitz.Document, xref: int, base: str, verify: bool = True
     if descendant is not None:
         dw = pdfobj.read_number_array(doc, descendant, "DW")
         default_width = dw[0] if dw else 1000.0
-        widths = _parse_cid_widths(doc, descendant)
+        widths = parse_cid_widths(doc, descendant)
         embedded = _has_font_file(doc, descendant)
     reverse = _invert({k: v for k, v in mapping.items() if len(k) == 2})
     if embedded and verify:
@@ -157,7 +157,7 @@ def _analyze_type0(doc: fitz.Document, xref: int, base: str, verify: bool = True
     return font
 
 
-def _parse_cid_widths(doc: fitz.Document, xref: int) -> dict[bytes, float]:
+def parse_cid_widths(doc: fitz.Document, xref: int) -> dict[bytes, float]:
     kind, value, _ = pdfobj.resolve(doc, xref, "W")
     if kind == "null":
         return {}
@@ -237,7 +237,7 @@ def _simple_reverse(doc: fitz.Document, xref: int, base: str, subtype: str, widt
     # ToUnicode is authoritative: in subset fonts it lists exactly the glyphs present.
     # Without it we fall back to the encoding, keeping only codes with a real width
     # so we never emit a code whose glyph was stripped by the subsetter.
-    mapping, _ = _tounicode(doc, xref)
+    mapping, _ = read_tounicode(doc, xref)
     glyph_names: encodings.GlyphTable | None = None
     if not mapping:
         glyph_names = _encoding_glyphs(doc, xref, base, program)
@@ -318,13 +318,13 @@ def tag_font(doc: fitz.Document, xref: int, font_id: str) -> None:
     doc.xref_set_key(xref, TAG_KEY, fitz.get_pdf_str(font_id))
 
 
+def _has_tag(doc: fitz.Document, xref: int, font_id: str) -> bool:
+    kind, value = pdfobj.get_key(doc, xref, TAG_KEY)
+    # PyMuPDF returns PDF strings without their parentheses.
+    return kind == "string" and value == font_id
+
+
 def find_tagged_font(doc: fitz.Document, font_id: str, hint: int | None = None) -> int | None:
-    wanted = fitz.get_pdf_str(font_id)
-    if hint and 0 < hint < doc.xref_length():
-        if pdfobj.get_key(doc, hint, TAG_KEY)[1] == wanted:
-            return hint
-    for xref in range(1, doc.xref_length()):
-        kind, value = pdfobj.get_key(doc, xref, TAG_KEY)
-        if kind != "null" and value == wanted:
-            return xref
-    return None
+    if hint and 0 < hint < doc.xref_length() and _has_tag(doc, hint, font_id):
+        return hint
+    return next((xref for xref in range(1, doc.xref_length()) if _has_tag(doc, xref, font_id)), None)
