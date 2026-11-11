@@ -19,7 +19,7 @@ import pymupdf as fitz
 from fontTools.ttLib import TTFont, TTLibError
 
 from . import fontfiles
-from .fontres import normalize_font_name
+from .fontres import clean_font_name, normalize_font_name
 
 log = logging.getLogger(__name__)
 
@@ -97,6 +97,33 @@ def style_from_name(name: str) -> tuple[bool, bool]:
     bold = any(word in lowered for word in _BOLD_WORDS) or bool(re.search(r"[-,]bd(it)?$", lowered))
     italic = "italic" in lowered or "oblique" in lowered or bool(re.search(r"[-,](bd)?it(mt)?$", lowered))
     return bold, italic
+
+
+# What may follow a family name without naming another face: "ArialMT", "TimesNewRomanPSMT".
+_NEUTRAL_SUFFIX = re.compile(r"^(ps)?(mt)?(regular|roman|book|normal|plain)?(ps)?(mt)?$")
+MUPDF_NAME_LIMIT = 31  # MuPDF keeps at most this many characters of a font name
+
+
+def font_name_rank(wanted: str, name: str) -> int | None:
+    """How well font ``name`` matches the span font ``wanted``.
+
+    0: the same name. 1: the same face under a vendor suffix, or a name MuPDF
+    truncated. None: another face, e.g. "Calibri" vs "Calibri-Light" or "Arial"
+    vs "Arial-BoldMT" (prefix matching would switch the weight).
+    """
+    a, b = normalize_font_name(wanted), normalize_font_name(name)
+    if not a or not b:
+        return None
+    if a == b:
+        return 0
+    shorter, longer, raw_shorter = (a, b, wanted) if len(a) < len(b) else (b, a, name)
+    if not longer.startswith(shorter):
+        return None
+    if len(clean_font_name(raw_shorter)) >= MUPDF_NAME_LIMIT:
+        return 1
+    if _NEUTRAL_SUFFIX.match(longer[len(shorter):]) and style_from_name(wanted) == style_from_name(name):
+        return 1
+    return None
 
 
 def _faces_from_file(path: Path) -> list[FontFace]:

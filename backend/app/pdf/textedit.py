@@ -8,7 +8,7 @@ from dataclasses import dataclass, field, replace
 import pymupdf as fitz
 
 from . import decor, extract, fontres, ocr, pdfobj, push, textstate
-from .fonts import FontCatalog, FontFace, style_from_name
+from .fonts import FontCatalog, FontFace, font_name_rank, style_from_name
 from .geometry import (
     from_display_point,
     from_display_vector,
@@ -92,28 +92,28 @@ class EditReport:
 
 
 # --------------------------------------------------------------- font logic
-def _page_font_candidates(doc: fitz.Document, page: fitz.Page, span_font: str) -> list[fontres.EmbeddedFont]:
-    wanted = fontres.normalize_font_name(span_font)
+def _page_font_candidates(doc: fitz.Document, page: fitz.Page,
+                          span_font: str) -> list[tuple[int, fontres.EmbeddedFont]]:
+    """(name rank, font) of the page fonts that are the span's face (see ``font_name_rank``)."""
     results = []
     seen: set[int] = set()
     for xref, _ext, _type, basefont, _name, _enc, *_ in page.get_fonts(full=True):
         if xref <= 0 or xref in seen:
             continue
-        name = fontres.normalize_font_name(basefont)
-        if name == wanted or (wanted and (name.startswith(wanted) or wanted.startswith(name))):
+        rank = font_name_rank(span_font, basefont)
+        if rank is not None:
             seen.add(xref)
             analysed = fontres.analyze_font(doc, xref)
             if analysed is not None:
-                results.append(analysed)
+                results.append((rank, analysed))
     return results
 
 
 def resolve_span_font(doc: fitz.Document, page: fitz.Page, span: dict) -> fontres.EmbeddedFont | None:
-    candidates = _page_font_candidates(doc, page, span["font"])
-    if not candidates:
-        return None
-    best = max(candidates, key=lambda font: font.coverage(span["text"]))
-    return best if best.coverage(span["text"]) >= 0.6 else None
+    """The page font that drew the span: the closest name first, then the best coverage."""
+    scored = [(rank, font, font.coverage(span["text"])) for rank, font in _page_font_candidates(doc, page, span["font"])]
+    usable = [item for item in scored if item[2] >= 0.6]
+    return min(usable, key=lambda item: (item[0], -item[2]))[1] if usable else None
 
 
 def _record_font(doc: fitz.Document, span: dict) -> fontres.EmbeddedFont | None:
