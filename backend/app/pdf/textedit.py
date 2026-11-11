@@ -178,6 +178,9 @@ def plan_fonts(
             base = {**base, **dict(zip(("bold", "italic"), style_from_name(font_name)))}
     elif span is not None:
         embedded = _record_font(doc, span) or resolve_span_font(doc, page, span)
+        record = span.get("record")
+        if embedded is not None and record is not None and record.font_xref == embedded.xref:
+            embedded = embedded.preferring(record.codes)  # keep old-style figures, small caps...
 
     substitute = catalog.substitute(font_name, bold, italic, base["serif"], base["mono"])
     drop_bold, drop_italic = fake_bold and not bold, fake_italic and not italic

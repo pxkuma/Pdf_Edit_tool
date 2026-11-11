@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from functools import cached_property
 
 import pymupdf as fitz
@@ -53,6 +53,8 @@ class EmbeddedFont:
     default_width: float = 500.0
     width_scale: float = 1.0
     embedded: bool = True
+    # code -> text of every mapped code (``reverse`` keeps one code per text)
+    forward: dict[bytes, str] = field(default_factory=dict)
 
     @property
     def display_name(self) -> str:
@@ -88,6 +90,14 @@ class EmbeddedFont:
                     pos += size
                     break
         return result
+
+    def preferring(self, codes: tuple[bytes, ...]) -> "EmbeddedFont":
+        """A copy whose reverse map uses ``codes`` (most frequent first) where several
+        codes draw the same text, e.g. the old-style figures a span was set in.
+        Codes the original text showed are drawn by the font, so no check is needed."""
+        chosen = {self.forward[code]: code for code in reversed(codes) if self.forward.get(code)}
+        changed = {text: code for text, code in chosen.items() if text in self.reverse and self.reverse[text] != code}
+        return replace(self, reverse={**self.reverse, **changed}) if changed else self
 
     def width_of(self, code: bytes) -> float:
         """Advance width of a code in 1/1000 em."""
@@ -182,6 +192,7 @@ def _analyze_type0(doc: fitz.Document, xref: int, base: str, verify: bool = True
         widths=widths,
         default_width=default_width,
         embedded=embedded,
+        forward=_with_code_length(mapping, 2),
     )
     return font
 
@@ -255,7 +266,7 @@ def _analyze_simple(doc: fitz.Document, xref: int, base: str, subtype: str, veri
     needs_program = verify or pdfobj.get_key(doc, xref, "ToUnicode")[0] == "null"
     program = fontprog.load(doc, xref) if embedded and needs_program and subtype != "Type3" else None
     try:
-        reverse = _simple_reverse(doc, xref, base, subtype, widths, program, verify)
+        reverse, forward = _simple_reverse(doc, xref, base, subtype, widths, program, verify)
     finally:
         if program is not None:
             program.close()
@@ -273,6 +284,7 @@ def _analyze_simple(doc: fitz.Document, xref: int, base: str, subtype: str, veri
         default_width=_missing_width(doc, xref, base, widths),
         width_scale=scale,
         embedded=embedded,
+        forward=forward,
     )
     if not widths:
         _fill_standard_widths(font)
@@ -300,12 +312,13 @@ def _simple_reverse(doc: fitz.Document, xref: int, base: str, subtype: str, widt
         mapping = cmap.glyph_table_to_map(glyph_names)
         if widths:
             mapping = {code: ch for code, ch in mapping.items() if widths.get(code, 0) > 0 or ch == " "}
-    reverse = _invert(_with_code_length(mapping, 1))
+    forward = _with_code_length(mapping, 1)
+    reverse = _invert(forward)
     if program is not None and verify:
         if glyph_names is None:
             glyph_names = _encoding_glyphs(doc, xref, base, program)
         reverse = fontcheck.filter_simple(program, reverse, glyph_names, fontcheck.is_symbolic(doc, xref))
-    return reverse
+    return reverse, forward
 
 
 def _encoding_glyphs(doc: fitz.Document, xref: int, base: str,
