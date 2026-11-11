@@ -1,10 +1,11 @@
 import { ChevronDown, ChevronUp, Eraser, Replace, Search } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { api } from "../../api/client";
+import { removedNote } from "../../lib/redaction";
 import { useEditor } from "../../store/editor";
 
 export function SearchPanel() {
-  const { doc, searchHits, activeHit, setSearch, setActiveHit, scrollTo, run, track, toast } = useEditor();
+  const { doc, searchHits, activeHit, setSearch, setActiveHit, scrollTo, run, track, toast, redactSanitize } = useEditor();
   const [query, setQuery] = useState("");
   const [replacement, setReplacement] = useState("");
   const [matchCase, setMatchCase] = useState(false);
@@ -49,8 +50,8 @@ export function SearchPanel() {
   };
 
   const redactAll = async () => {
-    const result = await run(() => api.redactSearch(doc.id, query, "", "#000000"));
-    if (result) toast(`Redacted ${result.redacted} occurrence(s)`, "success");
+    const result = await run(() => api.redactSearch(doc.id, query, "", "#000000", redactSanitize));
+    if (result) toast(`Redacted ${result.redacted} occurrence(s)${removedNote(result)}`, "success");
     setSearch([]);
   };
 

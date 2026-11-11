@@ -177,6 +177,7 @@ interface EditorState {
   ink: DrawStyle;
   shape: DrawStyle;
   redactColor: string;
+  redactSanitize: boolean;
   activeEdit: ActiveEdit | null;
   placement: Placement | null;
   searchHits: SearchHit[];
@@ -201,6 +202,7 @@ interface EditorActions {
   patchInk: (patch: Partial<DrawStyle>) => void;
   patchShape: (patch: Partial<DrawStyle>) => void;
   setRedactColor: (color: string) => void;
+  setRedactSanitize: (sanitize: boolean) => void;
   setActiveEdit: (edit: ActiveEdit | null) => void;
   patchDraft: (patch: Partial<SpanDraft>) => void;
   patchEdit: (patch: Partial<ActiveEdit>) => void;
@@ -251,6 +253,7 @@ const defaultStyles = {
   ink: { color: "#e11d48", fill: null, width: 2, opacity: 1, dashed: false } as DrawStyle,
   shape: { color: "#2563eb", fill: null, width: 2, opacity: 1, dashed: false } as DrawStyle,
   redactColor: "#000000",
+  redactSanitize: false,
 };
 
 const savedStyles = readStorage(STYLE_KEY, defaultStyles);
@@ -264,8 +267,8 @@ export function errorMessage(error: unknown): string {
 
 export const useEditor = create<EditorState & EditorActions>((set, get) => {
   const persistStyles = () => {
-    const { newText, markup, ink, shape, redactColor } = get();
-    writeStorage(STYLE_KEY, { newText, markup, ink, shape, redactColor });
+    const { newText, markup, ink, shape, redactColor, redactSanitize } = get();
+    writeStorage(STYLE_KEY, { newText, markup, ink, shape, redactColor, redactSanitize });
   };
 
   return {
@@ -285,6 +288,7 @@ export const useEditor = create<EditorState & EditorActions>((set, get) => {
     ink: savedStyles.ink,
     shape: savedStyles.shape,
     redactColor: savedStyles.redactColor,
+    redactSanitize: savedStyles.redactSanitize === true,
     activeEdit: null,
     placement: null,
     searchHits: [],
@@ -338,6 +342,10 @@ export const useEditor = create<EditorState & EditorActions>((set, get) => {
     },
     setRedactColor: (color) => {
       set({ redactColor: color });
+      persistStyles();
+    },
+    setRedactSanitize: (sanitize) => {
+      set({ redactSanitize: sanitize });
       persistStyles();
     },
     setActiveEdit: (edit) => set({ activeEdit: edit }),

@@ -10,6 +10,7 @@ import type {
   Metadata,
   OcrCapabilities,
   MutationResponse,
+  RedactResult,
   PageModel,
   Point,
   Rect,
@@ -209,10 +210,10 @@ export const api = {
   cropPages: (id: string, pages: number[], rect: Rect): Mut => request("POST", `${doc(id)}/pages/crop`, { pages, rect }),
   resetCrop: (id: string, pages: number[]): Mut => request("POST", `${doc(id)}/pages/reset-crop`, { pages }),
 
-  redact: (id: string, page: number, rects: Rect[], mode: string, color: string): Mut =>
-    request("POST", `${doc(id)}/redact`, { page, rects, mode, color }),
-  redactSearch: (id: string, query: string, pages: string, color: string): Mut<{ redacted: number }> =>
-    request("POST", `${doc(id)}/redact/search`, { query, pages: pages || null, color }),
+  redact: (id: string, page: number, rects: Rect[], mode: string, color: string, sanitize = false): Mut<RedactResult> =>
+    request("POST", `${doc(id)}/redact`, { page, rects, mode, color, sanitize }),
+  redactSearch: (id: string, query: string, pages: string, color: string, sanitize = false): Mut<RedactResult & { redacted: number }> =>
+    request("POST", `${doc(id)}/redact/search`, { query, pages: pages || null, color, sanitize }),
   watermark: (id: string, body: Record<string, unknown>): Mut => request("POST", `${doc(id)}/watermark`, body),
   imageWatermark(id: string, file: File, pages: string, scale: number, opacity: number): Mut {
     const form = new FormData();
