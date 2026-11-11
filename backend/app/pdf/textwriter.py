@@ -148,14 +148,21 @@ class FontChain:
         return []
 
     def _space_glyph(self, char: str) -> Glyph:
-        width = SPACE_FALLBACK_WIDTH
-        primary = self._primary_font()
-        if primary is not None:
-            width = primary.glyph_advance(32) * 1000.0 or SPACE_FALLBACK_WIDTH
-        if self.embedded is not None:
-            # Average-ish space for the original font: use its default width hint.
-            width = width if self.embedded.subtype != "Type3" else SPACE_FALLBACK_WIDTH
+        """An advance-only space for fonts without a space glyph: the original font's
+        own space width when its /Widths has one, else the substitute's."""
+        width = self._embedded_space_width()
+        if width is None:
+            primary = self._primary_font()
+            if primary is not None and (self.embedded is None or self.embedded.subtype != "Type3"):
+                width = primary.glyph_advance(32) * 1000.0
+        width = width or SPACE_FALLBACK_WIDTH
         return Glyph("", b"", width * (4 if char == "\t" else 1), char)
+
+    def _embedded_space_width(self) -> float | None:
+        font = self.embedded
+        if font is None or font.code_bytes != 1 or not font.widths.get(b" "):
+            return None
+        return font.width_of(b" ")
 
     def face_for_key(self, key: str) -> FontFace | None:
         entry = self.entry_for_key(key)
