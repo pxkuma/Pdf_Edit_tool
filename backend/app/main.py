@@ -12,20 +12,23 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import deps
-from .api import documents, edits, fonts, ocr, pages
+from .api import documents, edits, fonts, ocr, pages, signatures
 from .pdf.annots import AnnotationError
 from .pdf.doctools import ToolError
 from .pdf.forms import FormError
 from .pdf.images import ImageError
 from .pdf.ocr import OcrError
 from .pdf.pages import PageError
+from .pdf.sigcert import CertificateError
+from .pdf.signing import SignatureError
 from .pdf.textedit import TextEditError
 from .storage import DocumentNotFound, InvalidDocument, PasswordRequired
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("pdf-studio")
 
-USER_ERRORS = (TextEditError, AnnotationError, ToolError, FormError, ImageError, PageError, InvalidDocument, OcrError)
+USER_ERRORS = (TextEditError, AnnotationError, ToolError, FormError, ImageError, PageError, InvalidDocument, OcrError,
+               CertificateError, SignatureError)
 
 
 async def _cleanup_loop() -> None:
@@ -96,6 +99,7 @@ app.include_router(pages.router)
 app.include_router(edits.router)
 app.include_router(fonts.router)
 app.include_router(ocr.router)
+app.include_router(signatures.router)
 
 
 @app.get("/api/health")
