@@ -575,7 +575,8 @@ def _layout(
         extra = 0.0
         if align == "justify" and max_width and not paragraph_end and width < max_width:
             spaces = sum(1 for g in glyphs if g.char == " ")
-            extra = (max_width - width) / spaces if spaces else 0.0
+            # ``width`` is already scaled by Tz, and so is the extra space (line_width, TJ).
+            extra = (max_width - width) / spaces / (style.hscale / 100.0) if spaces else 0.0
         shift = _align_offset(width, max_width, align)
         origin = (
             first_origin[0] + down[0] * step * index + direction[0] * shift,
