@@ -1,18 +1,24 @@
-"""Comments: listing, replies, review status."""
+"""Comments: listing, replies, review status, and XFDF import/export."""
 
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, File, UploadFile
+from fastapi.responses import Response
 
 from .. import deps
-from ..pdf import commentops, comments
+from ..pdf import commentops, comments, xfdf_import
 from ..pdf.commentops import NewComment
 from ..pdf.comments import REVIEW_STATES
-from ..storage import PDF_LOCK
+from ..pdf.xfdf_export import export_xfdf
+from ..pdf.xfdf_parse import MAX_BYTES
+from ..storage import PDF_LOCK, Mutation
 from . import schemas
-from .common import amutate, ok, single_page
+from .common import amutate, ok, read_upload, single_page
+from .documents import _download, _stem
 
 router = APIRouter(prefix="/api/documents/{doc_id}")
+
+XFDF_TYPE = "application/vnd.adobe.xfdf"
 
 
 @router.get("/comments")
@@ -65,3 +71,24 @@ async def set_status(doc_id: str, page: int, xref: int, body: schemas.CommentSta
     else:
         label = "Checked comment" if body.checked else "Unchecked comment"
     return await amutate(doc_id, label, single_page(page, operate))
+
+
+# ------------------------------------------------------------------ XFDF
+@router.get("/comments/xfdf")
+def export_comments(doc_id: str) -> Response:
+    store = deps.store()
+    with PDF_LOCK:
+        state, doc = store.open_current(doc_id)
+        data = export_xfdf(doc, state.filename)
+    return _download(data, f"{_stem(state.filename)}.xfdf", XFDF_TYPE)
+
+
+@router.post("/comments/xfdf")
+async def import_comments(doc_id: str, file: UploadFile = File(...)) -> dict:
+    data = await read_upload(file, MAX_BYTES, "XFDF file")
+
+    def run(doc):
+        report = xfdf_import.import_xfdf(doc, data)
+        return Mutation(changed=frozenset(report.pages), result=report.as_dict())
+
+    return await amutate(doc_id, "Imported comments", run)
