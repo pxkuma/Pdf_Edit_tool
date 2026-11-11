@@ -111,6 +111,8 @@ def test_reordering_with_repeats_makes_independent_pages(client):
     doc_id = created["id"]
     response = client.post(f"/api/documents/{doc_id}/pages/reorder", json={"order": [0, 0, 1]})
     assert response.status_code == 200, response.text
+    tokens = [page["token"] for page in response.json()["data"]["document"]["pages"]]
+    assert tokens[0] == created["pages"][0]["token"] and len(set(tokens)) == 3  # the copy is a new page revision
     pdf = current_pdf(client, doc_id)
     assert pdf.page_count == 3
     assert len({pdf.page_xref(i) for i in range(3)}) == 3  # no page object is used twice

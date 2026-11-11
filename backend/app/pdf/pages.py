@@ -45,24 +45,29 @@ def reorder(doc: fitz.Document, order: list[int]) -> Mutation:
         raise PageError("A document must keep at least one page.")
     if any(not 0 <= index < doc.page_count for index in order):
         raise PageError("Page number out of range.")
-    doc.select(_independent_selection(doc, order))
-    repeats = frozenset(position for position, index in enumerate(order) if index in order[:position])
-    return Mutation(changed=repeats, page_map=tuple(order))
+    selection, repeats = _independent_selection(doc, order)
+    doc.select(selection)
+    return Mutation(changed=frozenset(repeats), page_map=tuple(order))
 
 
-def _independent_selection(doc: fitz.Document, order: list[int]) -> list[int]:
+def _independent_selection(doc: fitz.Document, order: list[int]) -> tuple[list[int], list[int]]:
     """``Document.select`` lets a repeated index share one page object, so editing one copy would change
-    the other. Every repeat gets its own physical copy (appended at the end, then selected)."""
+    the other. Every repeat gets its own physical copy (appended at the end, then selected).
+
+    Returns the selection and the positions (in the new order) that hold such copies.
+    """
     seen: set[int] = set()
-    selection = []
-    for index in order:
+    selection: list[int] = []
+    repeats: list[int] = []
+    for position, index in enumerate(order):
         if index in seen:
             doc.fullcopy_page(index, -1)
             selection.append(doc.page_count - 1)
+            repeats.append(position)
         else:
             seen.add(index)
             selection.append(index)
-    return selection
+    return selection, repeats
 
 
 def delete(doc: fitz.Document, pages: list[int]) -> Mutation:
