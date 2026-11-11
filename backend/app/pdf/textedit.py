@@ -15,6 +15,7 @@ from .geometry import (
     hex_to_rgb,
     shrink_for_redaction,
 )
+from .redaction import redact_areas
 from .textwriter import FontChain, Glyph, PlacedLine, TextStyle, line_width, write_lines
 
 
@@ -297,26 +298,6 @@ def _report(chain: FontChain) -> EditReport:
                 names.append(f"{face.family} {face.style}")
                 exact = False if chain.embedded is not None else exact
     return EditReport(names, sorted(chain.missing), exact and not chain.missing)
-
-
-# --------------------------------------------------------------- redaction
-def redact_areas(page: fitz.Page, rects: list[fitz.Rect], fill: tuple | bool = False,
-                 images: int = fitz.PDF_REDACT_IMAGE_NONE,
-                 graphics: int = fitz.PDF_REDACT_LINE_ART_NONE,
-                 text: int = fitz.PDF_REDACT_TEXT_REMOVE) -> None:
-    """Apply redactions for ``rects`` without applying pre-existing redact annots."""
-    pending = []
-    for annot in list(page.annots(types=[fitz.PDF_ANNOT_REDACT]) or []):
-        pending.append((fitz.Rect(annot.rect), annot.info))
-        page.delete_annot(annot)
-    for rect in rects:
-        if not rect.is_empty:
-            page.add_redact_annot(rect, fill=fill)
-    page.apply_redactions(images=images, graphics=graphics, text=text)
-    for rect, info in pending:
-        restored = page.add_redact_annot(rect)
-        restored.set_info(info)
-        restored.update()
 
 
 def _auto_char_spacing(span: dict, chain: FontChain, style: TextStyle) -> float:

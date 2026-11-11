@@ -202,3 +202,30 @@ def test_forced_ocr_cleanup_does_not_apply_marked_redactions():
     ocr.remove_invisible_text(doc[0])
     assert "KEEP beta" in doc[0].get_text()
     assert len(pending(doc[0])) == 1
+
+
+def test_text_edits_keep_the_overlay_text_and_fill_of_marked_redactions(client):
+    """Editing text never applies pending marks, and the mark comes back exactly as it was."""
+    from conftest import page_spans
+
+    created = client.post("/api/documents", files={"file": ("m.pdf", make_marked_pdf(), "application/pdf")}).json()["data"]
+    doc_id = created["id"]
+    before = pending(current_pdf(client, doc_id)[0])
+    assert len(before) == 1 and "OverlayText(OVERLAY)" in before[0]["object"]
+
+    span = next(s for s in page_spans(client, doc_id, 0) if "SECRET" in s["text"])
+    edits = [
+        ("/text/span", {"page": 0, "bbox": span["bbox"], "origin": span["origin"], "original_text": span["text"],
+                        "text": "PUBLIC alpha"}),
+        ("/text/block", {"page": 0, "bbox": span["bbox"], "text": "PUBLIC alpha beta"}),
+        ("/objects/delete", {"page": 0, "items": [{"kind": "text", "bbox": span["bbox"]}]}),
+    ]
+    for route, body in edits:
+        response = client.post(f"/api/documents/{doc_id}{route}", json=body)
+        assert response.status_code == 200, response.text
+        page = current_pdf(client, doc_id)[0]
+        assert "KEEP beta" in page.get_text(), f"{route} applied the pending redaction"
+        after = pending(page)
+        assert [(p["info"], p["rect"]) for p in after] == [(p["info"], p["rect"]) for p in before], route
+        assert "OverlayText(OVERLAY)" in after[0]["object"], f"{route} lost the overlay text"
+        assert "/IC[1 0 0]" in after[0]["object"], f"{route} lost the fill colour"
