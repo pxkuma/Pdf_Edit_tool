@@ -141,3 +141,14 @@ def test_job_progress_counts_every_page_from_many_threads():
     for thread in threads:
         thread.join()
     assert job.done == 800
+
+
+# ------------------------------------------------------------------ D8: page model of the requested revision
+def test_page_model_names_its_revision_and_refuses_another(client):
+    created = open_doc(client, make_sample_pdf())
+    doc_id, token = created["id"], created["pages"][0]["token"]
+    ok = client.get(f"/api/documents/{doc_id}/pages/0/model", params={"t": token})
+    assert ok.status_code == 200 and ok.json()["data"]["token"] == token
+    stale = client.get(f"/api/documents/{doc_id}/pages/0/model", params={"t": "0" * 12})
+    assert stale.status_code == 409
+    assert client.get(f"/api/documents/{doc_id}/pages/0/model").status_code == 200  # the token stays optional

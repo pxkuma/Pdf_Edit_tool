@@ -65,12 +65,16 @@ def _matrix(bucket: int) -> fitz.Matrix:
 
 
 @router.get("/pages/{index}/model")
-def model(doc_id: str, index: int) -> dict:
+def model(doc_id: str, index: int, t: str = "") -> dict:
+    """The page model of the current revision. With ``t`` the caller names the revision it needs and gets
+    a 409 instead of the model of a different one."""
     store = deps.store()
     with PDF_LOCK:
         state, doc = store.open_current(doc_id)
         page = check_page(doc, index)
         token = state.current.tokens[index]
+        if t and t != token:
+            raise HTTPException(status_code=409, detail="This page has changed. Reload and try again.")
         key = (doc_id, token, deps.catalog().version)
         cached = _MODEL_CACHE.get(key)
         if cached is None:

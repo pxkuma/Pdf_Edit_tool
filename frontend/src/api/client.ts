@@ -102,7 +102,8 @@ export const api = {
 
   renderUrl: (id: string, page: number, scale: number, token: string) =>
     `${doc(id)}/pages/${page}/render?scale=${scale}&t=${token}`,
-  pageModel: (id: string, page: number) => request<PageModel>("GET", `${doc(id)}/pages/${page}/model`),
+  pageModel: (id: string, page: number, token = "") =>
+    request<PageModel>("GET", `${doc(id)}/pages/${page}/model${token ? `?t=${encodeURIComponent(token)}` : ""}`),
   fonts: () => request<{ families: FontFamily[]; default: string | null }>("GET", "/api/fonts"),
   fontFileUrl: (faceId: string) => `/api/fonts/${faceId}/file`,
   uploadFont(file: File): Promise<{ id: string; family: string; style: string }> {
