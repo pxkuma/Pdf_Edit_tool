@@ -1,6 +1,7 @@
 import { ChevronDown, ChevronUp, Eraser, Replace, Search } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { api } from "../../api/client";
+import { missingCharsWarning } from "../../lib/missingChars";
 import { removedNote } from "../../lib/redaction";
 import { useEditor } from "../../store/editor";
 
@@ -46,9 +47,8 @@ export function SearchPanel() {
     if (!result) return;
     const skipped = result.skipped ? ` (${result.skipped} could not be replaced because they span several styles)` : "";
     toast(`Replaced ${result.replaced} occurrence(s)${skipped}`, result.replaced ? "success" : "warning");
-    if (result.missing_chars?.length) {
-      toast(`No installed font contains: ${result.missing_chars.join(" ")} — those characters were skipped.`, "warning");
-    }
+    const missing = missingCharsWarning(result.missing_chars);
+    if (missing) toast(missing, "warning");
     setSearch([]);
   };
 

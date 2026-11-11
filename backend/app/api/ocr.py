@@ -39,7 +39,7 @@ def _ocr_work(doc_id: str, body: schemas.OcrBody, language: str) -> callable:
         job.total = len(targets)
         if not targets:
             job.message = "All selected pages already have OCR text."
-            job.result = {"pages": [], "words": 0, "skipped": []}
+            job.result = {"pages": [], "words": 0, "skipped": [], "missing_chars": []}
             job.document = doc_info(store.get(doc_id))
             return
 
@@ -56,7 +56,7 @@ def _ocr_work(doc_id: str, body: schemas.OcrBody, language: str) -> callable:
 
         def apply(pdf) -> Mutation:
             latest = store.get(doc_id).current.tokens
-            written, skipped, words = [], [], 0
+            written, skipped, words, missing = [], [], 0, set()
             for index, lines in results.items():
                 if index >= len(latest) or latest[index] != tokens[index]:
                     skipped.append(index)  # page changed while OCR was running
@@ -64,9 +64,12 @@ def _ocr_work(doc_id: str, body: schemas.OcrBody, language: str) -> callable:
                 page = pdf[index]
                 if body.force:
                     ocr.remove_invisible_text(page)
-                words += ocr.write_text_layer(pdf, page, deps.catalog(), lines)
+                layer = ocr.write_text_layer(pdf, page, deps.catalog(), lines)
+                words += layer.words
+                missing.update(layer.missing_chars)
                 written.append(index)
-            return Mutation(changed=frozenset(written), result={"pages": written, "words": words, "skipped": skipped})
+            return Mutation(changed=frozenset(written), result={
+                "pages": written, "words": words, "skipped": skipped, "missing_chars": sorted(missing)})
 
         new_state, result = store.mutate(doc_id, f"OCR ({len(targets)} page{'s' if len(targets) > 1 else ''})", apply)
         job.result = result

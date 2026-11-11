@@ -61,14 +61,16 @@ class StampStyle:
 
 
 def _write_centered(doc: fitz.Document, page: fitz.Page, catalog: FontCatalog, text: str,
-                    style: StampStyle, center: tuple[float, float], angle: float) -> None:
+                    style: StampStyle, center: tuple[float, float], angle: float) -> frozenset[str]:
+    """Write ``text`` centred on ``center``. Returns the characters no font could draw."""
     request = StyleRequest(font=style.font, size=style.size, color=style.color, bold=style.bold,
                            italic=style.italic, opacity=style.opacity)
     plan = plan_fonts(doc, page, catalog, request, None)
     text_style = TextStyle(size=style.size, color=hex_to_rgb(style.color), opacity=style.opacity)
     glyphs = plan.chain.encode(text)
+    missing = frozenset(plan.chain.missing)
     if not glyphs:
-        return
+        return missing
     width = line_width(glyphs, text_style)
     rad = math.radians(angle)
     display_dir = (math.cos(rad), -math.sin(rad))
@@ -81,12 +83,15 @@ def _write_centered(doc: fitz.Document, page: fitz.Page, catalog: FontCatalog, t
     )
     origin = from_display_point(page, start_display)
     write_lines(doc, page, [PlacedLine((origin.x, origin.y), direction, glyphs)], text_style, plan.chain)
+    return missing
 
 
 def watermark(doc: fitz.Document, catalog: FontCatalog, pages: list[int], text: str, style: StampStyle,
-              angle: float, layout: str) -> None:
+              angle: float, layout: str) -> dict:
+    """Stamp ``text`` on ``pages``. The result lists the characters no installed font could draw."""
     if not text.strip():
         raise ToolError("Watermark text is empty.")
+    missing: frozenset[str] = frozenset()
     for index in pages:
         page = doc[index]
         w, h = page.rect.width, page.rect.height
@@ -97,12 +102,13 @@ def watermark(doc: fitz.Document, catalog: FontCatalog, pages: list[int], text: 
             while y < h + step_y:
                 x = (step_x / 2) * (row % 2)
                 while x < w + step_x:
-                    _write_centered(doc, page, catalog, text, style, (x, y), angle)
+                    missing |= _write_centered(doc, page, catalog, text, style, (x, y), angle)
                     x += step_x
                 y += step_y
                 row += 1
         else:
-            _write_centered(doc, page, catalog, text, style, (w / 2, h / 2), angle)
+            missing |= _write_centered(doc, page, catalog, text, style, (w / 2, h / 2), angle)
+    return {"missing_chars": sorted(missing)}
 
 
 def image_watermark(doc: fitz.Document, pages: list[int], data: bytes, scale: float, opacity: float) -> None:
@@ -141,13 +147,15 @@ def _fill_template(template: str, number: int, total: int, filename: str) -> str
 
 
 def header_footer(doc: fitz.Document, catalog: FontCatalog, pages: list[int], template: str, position: str,
-                  margin: float, style: StampStyle, start_number: int, filename: str) -> None:
+                  margin: float, style: StampStyle, start_number: int, filename: str) -> dict:
+    """Write the template on ``pages``. The result lists the characters no installed font could draw."""
     if position not in POSITIONS:
         raise ToolError("Unknown position.")
     if not template.strip():
         raise ToolError("Text is empty.")
     total = len(pages) + start_number - 1
     vertical, horizontal = position.split("-")
+    missing: frozenset[str] = frozenset()
     for offset, index in enumerate(pages):
         page = doc[index]
         text = _fill_template(template, start_number + offset, total, filename)
@@ -155,6 +163,7 @@ def header_footer(doc: fitz.Document, catalog: FontCatalog, pages: list[int], te
         plan = plan_fonts(doc, page, catalog, request, None)
         text_style = TextStyle(size=style.size, color=hex_to_rgb(style.color), opacity=style.opacity)
         glyphs = plan.chain.encode(text)
+        missing |= frozenset(plan.chain.missing)
         width = line_width(glyphs, text_style)
         w, h = page.rect.width, page.rect.height
         x = {"left": margin, "center": (w - width) / 2, "right": w - margin - width}[horizontal]
@@ -162,6 +171,7 @@ def header_footer(doc: fitz.Document, catalog: FontCatalog, pages: list[int], te
         origin = from_display_point(page, (x, y))
         direction = from_display_vector(page, (1.0, 0.0))
         write_lines(doc, page, [PlacedLine((origin.x, origin.y), direction, glyphs)], text_style, plan.chain)
+    return {"missing_chars": sorted(missing)}
 
 
 def search(doc: fitz.Document, query: str, limit: int = 2000) -> list[dict]:

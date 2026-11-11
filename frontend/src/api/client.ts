@@ -11,6 +11,7 @@ import type {
   OcrCapabilities,
   MutationResponse,
   RedactResult,
+  StampResult,
   PageModel,
   Point,
   Rect,
@@ -219,7 +220,7 @@ export const api = {
     request("POST", `${doc(id)}/redact`, { page, rects, mode, color, sanitize }),
   redactSearch: (id: string, query: string, pages: string, color: string, sanitize = false): Mut<RedactResult & { redacted: number }> =>
     request("POST", `${doc(id)}/redact/search`, { query, pages: pages || null, color, sanitize }),
-  watermark: (id: string, body: Record<string, unknown>): Mut => request("POST", `${doc(id)}/watermark`, body),
+  watermark: (id: string, body: Record<string, unknown>): Mut<StampResult> => request("POST", `${doc(id)}/watermark`, body),
   imageWatermark(id: string, file: File, pages: string, scale: number, opacity: number): Mut {
     const form = new FormData();
     form.append("file", file);
@@ -228,7 +229,8 @@ export const api = {
     form.append("opacity", String(opacity));
     return request("POST", `${doc(id)}/watermark/image`, form);
   },
-  headerFooter: (id: string, body: Record<string, unknown>): Mut => request("POST", `${doc(id)}/header-footer`, body),
+  headerFooter: (id: string, body: Record<string, unknown>): Mut<StampResult> =>
+    request("POST", `${doc(id)}/header-footer`, body),
 
   metadata: (id: string) => request<Metadata>("GET", `${doc(id)}/metadata`),
   setMetadata: (id: string, body: Partial<Metadata>): Mut => request("PUT", `${doc(id)}/metadata`, body),

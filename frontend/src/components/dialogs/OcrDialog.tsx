@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "../../api/client";
 import type { Job, OcrCapabilities } from "../../api/types";
 import { flushEdit } from "../../lib/editSession";
+import { missingCharsWarning } from "../../lib/missingChars";
 import { errorMessage, useEditor } from "../../store/editor";
 import { Modal } from "../common/Modal";
 
@@ -20,6 +21,7 @@ interface OcrResult {
   pages: number[];
   words: number;
   skipped: number[];
+  missing_chars: string[];
 }
 
 export function OcrDialog() {
@@ -67,6 +69,8 @@ export function OcrDialog() {
         const result = next.result;
         const skipped = result?.skipped.length ? ` ${result.skipped.length} page(s) changed during OCR and were skipped.` : "";
         toast(result && result.pages.length ? `Text recognised: ${result.words} words on ${result.pages.length} page(s).${skipped}` : next.message, "success");
+        const missing = missingCharsWarning(result?.missing_chars);
+        if (missing) toast(missing, "warning");
         openDialog(null);
       } catch (error) {
         toast(errorMessage(error), "error");

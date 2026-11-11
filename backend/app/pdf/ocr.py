@@ -132,8 +132,16 @@ def _line_metrics(line: OcrLine) -> tuple[float, float]:
     return size, baseline
 
 
-def write_text_layer(doc: fitz.Document, page: fitz.Page, catalog: FontCatalog, lines: list[OcrLine]) -> int:
-    """Write recognised words as invisible text exactly over the scan. Returns word count."""
+@dataclass(frozen=True)
+class TextLayer:
+    """What ``write_text_layer`` wrote: the word count and the characters no installed font could draw."""
+
+    words: int
+    missing_chars: list[str]
+
+
+def write_text_layer(doc: fitz.Document, page: fitz.Page, catalog: FontCatalog, lines: list[OcrLine]) -> TextLayer:
+    """Write recognised words as invisible text exactly over the scan."""
     face = catalog.substitute("Helvetica", False, False, False, False)
     chain = FontChain.build(catalog, None, face)
     direction = from_display_vector(page, (1.0, 0.0))
@@ -151,11 +159,12 @@ def write_text_layer(doc: fitz.Document, page: fitz.Page, catalog: FontCatalog, 
             origin = from_display_point(page, (word.rect[0], baseline))
             placed.append(PlacedLine((origin.x, origin.y), direction, glyphs, hscale=hscale, size=size))
             sizes.append(size)
+    missing = sorted(chain.missing)
     if not placed:
-        return 0
+        return TextLayer(0, missing)
     style = TextStyle(size=sorted(sizes)[len(sizes) // 2], render_mode=3)
     write_lines(doc, page, placed, style, chain)
-    return len(placed)
+    return TextLayer(len(placed), missing)
 
 
 def page_scan_info(page: fitz.Page) -> dict:

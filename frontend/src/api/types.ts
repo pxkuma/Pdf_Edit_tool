@@ -174,6 +174,11 @@ export interface EditReport {
   push_skipped?: string[];
 }
 
+/** What stamping text (watermark, header/footer) reports: characters no installed font could draw. */
+export interface StampResult {
+  missing_chars: string[];
+}
+
 export interface MutationResponse<T = unknown> {
   document: DocInfo;
   result: T;

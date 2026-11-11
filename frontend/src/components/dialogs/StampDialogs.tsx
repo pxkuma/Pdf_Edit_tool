@@ -2,13 +2,14 @@ import { Droplets, Hash, Image as ImageIcon } from "lucide-react";
 import { useState } from "react";
 import { api } from "../../api/client";
 import { pickFile } from "../../lib/files";
+import { missingCharsWarning } from "../../lib/missingChars";
 import { useEditor } from "../../store/editor";
 import { ColorPicker } from "../common/ColorPicker";
 import { FontPicker } from "../common/FontPicker";
 import { Modal } from "../common/Modal";
 
 export function WatermarkDialog() {
-  const { doc, openDialog, run } = useEditor();
+  const { doc, openDialog, run, toast } = useEditor();
   const [mode, setMode] = useState<"text" | "image">("text");
   const [text, setText] = useState("CONFIDENTIAL");
   const [font, setFont] = useState("face:");
@@ -29,7 +30,7 @@ export function WatermarkDialog() {
       await run(() => api.imageWatermark(doc.id, image, pages, scale, opacity), "Watermark added");
       return;
     }
-    await run(
+    const result = await run(
       () =>
         api.watermark(doc.id, {
           text,
@@ -40,6 +41,8 @@ export function WatermarkDialog() {
         }),
       "Watermark added",
     );
+    const missing = missingCharsWarning(result?.missing_chars);
+    if (missing) toast(missing, "warning");
   };
 
   return (
@@ -118,7 +121,7 @@ export function WatermarkDialog() {
 }
 
 export function HeaderFooterDialog() {
-  const { doc, openDialog, run } = useEditor();
+  const { doc, openDialog, run, toast } = useEditor();
   const [template, setTemplate] = useState("Page {n} of {total}");
   const [position, setPosition] = useState("bottom-center");
   const [font, setFont] = useState("face:");
@@ -132,7 +135,7 @@ export function HeaderFooterDialog() {
 
   const apply = async () => {
     close();
-    await run(
+    const result = await run(
       () =>
         api.headerFooter(doc.id, {
           template,
@@ -144,6 +147,8 @@ export function HeaderFooterDialog() {
         }),
       "Header/footer added",
     );
+    const missing = missingCharsWarning(result?.missing_chars);
+    if (missing) toast(missing, "warning");
   };
 
   const positions = ["top-left", "top-center", "top-right", "bottom-left", "bottom-center", "bottom-right"];

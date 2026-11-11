@@ -231,8 +231,9 @@ def redact_search(doc_id: str, body: schemas.RedactSearchBody) -> dict:
 def watermark(doc_id: str, body: schemas.WatermarkBody) -> dict:
     def run(doc):
         pages = doctools.resolve_pages(doc, body.pages)
-        doctools.watermark(doc, deps.catalog(), pages, body.text, _stamp_style(body.style), body.angle, body.layout)
-        return Mutation(changed=frozenset(pages))
+        result = doctools.watermark(doc, deps.catalog(), pages, body.text, _stamp_style(body.style), body.angle,
+                                    body.layout)
+        return Mutation(changed=frozenset(pages), result=result)
 
     return mutate(doc_id, "Added watermark", run)
 
@@ -258,8 +259,8 @@ def header_footer(doc_id: str, body: schemas.HeaderFooterBody) -> dict:
 
     def run(doc):
         pages = doctools.resolve_pages(doc, body.pages)
-        doctools.header_footer(doc, deps.catalog(), pages, body.template, body.position, body.margin,
-                               _stamp_style(body.style), body.start_number, filename)
-        return Mutation(changed=frozenset(pages))
+        result = doctools.header_footer(doc, deps.catalog(), pages, body.template, body.position, body.margin,
+                                        _stamp_style(body.style), body.start_number, filename)
+        return Mutation(changed=frozenset(pages), result=result)
 
     return mutate(doc_id, "Added header/footer", run)
