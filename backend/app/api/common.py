@@ -6,6 +6,7 @@ from typing import Any, Callable
 
 import pymupdf as fitz
 from fastapi import HTTPException, UploadFile
+from starlette.concurrency import run_in_threadpool
 
 from .. import deps
 from ..pdf.pages import page_info
@@ -42,6 +43,11 @@ def doc_info(state: DocState) -> dict:
 def mutate(doc_id: str, label: str, operation: Callable[[fitz.Document], Mutation | None]) -> dict:
     state, result = deps.store().mutate(doc_id, label, operation)
     return ok({"document": doc_info(state), "result": result})
+
+
+async def amutate(doc_id: str, label: str, operation: Callable[[fitz.Document], Mutation | None]) -> dict:
+    """``mutate`` for ``async`` handlers: the PDF work and the global lock stay off the event loop."""
+    return await run_in_threadpool(mutate, doc_id, label, operation)
 
 
 def check_page(doc: fitz.Document, index: int) -> fitz.Page:

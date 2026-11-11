@@ -14,7 +14,7 @@ from ..pdf.push import PushItem, PushRequest
 from ..pdf.textedit import BlockEdit, NewText, SpanEdit, StyleRequest
 from ..storage import PDF_LOCK, Mutation
 from . import schemas
-from .common import check_page, mutate, ok, read_upload, single_page
+from .common import amutate, check_page, mutate, ok, read_upload, single_page
 
 router = APIRouter(prefix="/api/documents/{doc_id}")
 
@@ -156,7 +156,7 @@ async def replace_image(doc_id: str, page: int, xref: int, file: UploadFile = Fi
         images.replace_image(check_page(doc, page), xref, data)
         return Mutation(changed=None)
 
-    return mutate(doc_id, "Replaced image", run)
+    return await amutate(doc_id, "Replaced image", run)
 
 
 @router.delete("/images/{page}/{xref}")
@@ -248,7 +248,7 @@ async def image_watermark(doc_id: str, file: UploadFile = File(...), pages: str 
         doctools.image_watermark(doc, targets, data, scale, opacity)
         return Mutation(changed=frozenset(targets))
 
-    return mutate(doc_id, "Added image watermark", run)
+    return await amutate(doc_id, "Added image watermark", run)
 
 
 @router.post("/header-footer")

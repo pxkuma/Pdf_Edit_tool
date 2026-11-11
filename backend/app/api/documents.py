@@ -9,6 +9,7 @@ from urllib.parse import quote
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import Response
+from starlette.concurrency import run_in_threadpool
 
 from .. import deps
 from ..pdf import doctools, textedit
@@ -42,8 +43,12 @@ def _zip(files: list[tuple[str, bytes]]) -> bytes:
 @router.post("/documents")
 async def upload(file: UploadFile = File(...), password: str | None = Form(None)) -> dict:
     data = await read_upload(file, deps.settings().max_upload_bytes, "file")
-    state = deps.store().create(file.filename or "document.pdf", data, password)
-    return ok(doc_info(state))
+    filename = file.filename or "document.pdf"
+
+    def create() -> dict:
+        return ok(doc_info(deps.store().create(filename, data, password)))
+
+    return await run_in_threadpool(create)  # MuPDF and the global lock must not run on the event loop
 
 
 @router.get("/documents/{doc_id}")

@@ -16,7 +16,7 @@ from ..pdf.fonts import FontFace
 from ..pdf.geometry import to_display_rect
 from ..storage import PDF_LOCK
 from . import schemas
-from .common import check_page, mutate, ok, read_upload, single_page
+from .common import amutate, check_page, mutate, ok, read_upload, single_page
 
 router = APIRouter(prefix="/api/documents/{doc_id}")
 
@@ -157,7 +157,7 @@ async def insert_file(doc_id: str, at: int = Form(...), file: UploadFile = File(
             return pages.insert_image_page(doc, data, at)
         return pages.insert_pdf(doc, data, at)
 
-    return mutate(doc_id, f"Inserted {file.filename or 'file'}", run)
+    return await amutate(doc_id, f"Inserted {file.filename or 'file'}", run)
 
 
 @router.post("/pages/crop")
@@ -190,7 +190,7 @@ async def add_image(doc_id: str, page: int = Form(...), rect: str = Form(...), f
     target = _parse_rect(rect)
 
     operation = single_page(page, lambda _doc, pg: images.insert_image(pg, target, data, keep_proportion))
-    return mutate(doc_id, "Added image", operation)
+    return await amutate(doc_id, "Added image", operation)
 
 
 def _parse_rect(value: str) -> tuple[float, float, float, float]:
