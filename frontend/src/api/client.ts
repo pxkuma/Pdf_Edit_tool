@@ -169,7 +169,8 @@ export const api = {
   replace: (
     id: string,
     body: { query: string; replacement: string; pages?: string; match_case: boolean; whole_word: boolean },
-  ): Mut<{ replaced: number; skipped: number; pages: number[] }> => request("POST", `${doc(id)}/text/replace`, body),
+  ): Mut<{ replaced: number; skipped: number; pages: number[]; missing_chars?: string[] }> =>
+    request("POST", `${doc(id)}/text/replace`, body),
 
   addAnnotation: (id: string, body: Record<string, unknown>): Mut<number> => request("POST", `${doc(id)}/annotations`, body),
   updateAnnotation: (id: string, page: number, xref: number, style: AnnotStyle, rect?: Rect | null): Mut =>

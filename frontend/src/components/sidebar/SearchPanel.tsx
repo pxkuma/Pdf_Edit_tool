@@ -46,6 +46,9 @@ export function SearchPanel() {
     if (!result) return;
     const skipped = result.skipped ? ` (${result.skipped} could not be replaced because they span several styles)` : "";
     toast(`Replaced ${result.replaced} occurrence(s)${skipped}`, result.replaced ? "success" : "warning");
+    if (result.missing_chars?.length) {
+      toast(`No installed font contains: ${result.missing_chars.join(" ")} — those characters were skipped.`, "warning");
+    }
     setSearch([]);
   };
 

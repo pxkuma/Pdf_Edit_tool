@@ -176,13 +176,23 @@ def search(doc: fitz.Document, query: str, limit: int = 2000) -> list[dict]:
     return hits
 
 
-def replace_text(doc: fitz.Document, catalog: FontCatalog, query: str, replacement: str,
-                 pages: list[int], match_case: bool, whole_word: bool) -> dict:
+def search_pattern(query: str, match_case: bool, whole_word: bool) -> re.Pattern:
+    """Compile a literal search. Whole-word only guards the ends of the query that are word characters,
+    so queries such as ``C++``, ``$5`` or ``(draft)`` work (``\\b`` never matches next to punctuation)."""
     if not query:
         raise ToolError("Search text is empty.")
-    flags = 0 if match_case else re.IGNORECASE
-    pattern = re.compile((r"\b%s\b" if whole_word else "%s") % re.escape(query), flags)
-    replaced, skipped, changed = 0, 0, set()
+    body = re.escape(query)
+    if whole_word:
+        before = r"(?<!\w)" if re.match(r"\w", query[0]) else ""
+        after = r"(?!\w)" if re.match(r"\w", query[-1]) else ""
+        body = f"{before}{body}{after}"
+    return re.compile(body, 0 if match_case else re.IGNORECASE)
+
+
+def replace_text(doc: fitz.Document, catalog: FontCatalog, query: str, replacement: str,
+                 pages: list[int], match_case: bool, whole_word: bool) -> dict:
+    pattern = search_pattern(query, match_case, whole_word)
+    replaced, skipped, changed, missing = 0, 0, set(), set()
     for index in pages:
         page = doc[index]
         total = len(pattern.findall(page.get_text()))
@@ -190,14 +200,15 @@ def replace_text(doc: fitz.Document, catalog: FontCatalog, query: str, replaceme
         for bbox, origin, text in _spans_matching(page, pattern):
             new_text, count = pattern.subn(lambda _m: replacement, text)
             try:
-                edit_span(doc, page, catalog, SpanEdit(bbox, origin, text, new_text, StyleRequest()))
+                report = edit_span(doc, page, catalog, SpanEdit(bbox, origin, text, new_text, StyleRequest()))
             except TextEditError:
                 continue
+            missing.update(report.missing_chars)
             page_replaced += count
             changed.add(index)
         replaced += page_replaced
         skipped += max(0, total - page_replaced)
-    return {"replaced": replaced, "skipped": skipped, "pages": sorted(changed)}
+    return {"replaced": replaced, "skipped": skipped, "pages": sorted(changed), "missing_chars": sorted(missing)}
 
 
 def _spans_matching(page: fitz.Page, pattern: re.Pattern) -> list[tuple]:
