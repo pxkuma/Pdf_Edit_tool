@@ -132,3 +132,21 @@ def test_tagged_font_is_found_again():
     assert fontres.find_tagged_font(reopened, "58adf1c492b3") == xref
     assert fontres.find_tagged_font(reopened, "58adf1c492b3", hint=xref) == xref
     assert fontres.find_tagged_font(reopened, "000000000000") is None
+
+
+def test_face_already_on_the_page_is_found_without_scanning_the_file(catalog, monkeypatch):
+    # C21: finding the tagged font scanned every object of the document on every edit.
+    doc, page = raw_page(HELVETICA, HELLO)
+    _edit_first_span(doc, page, catalog, "Hello Ωmega")
+    (xref,) = _tagged_fonts(doc)
+    hints = []
+    original = fontres.find_tagged_font
+
+    def spy(doc_, font_id, hint=None):
+        hints.append(hint)
+        return original(doc_, font_id, hint)
+
+    monkeypatch.setattr(fontres, "find_tagged_font", spy)
+    textedit.add_text(doc, page, catalog, textedit.NewText(72, 500, "Ψ", textedit.StyleRequest(
+        font=f"face:{pdfobj.get_key(doc, xref, fontres.TAG_KEY)[1]}", size=24)))
+    assert hints == [xref]

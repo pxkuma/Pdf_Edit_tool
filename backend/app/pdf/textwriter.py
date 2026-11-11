@@ -231,13 +231,15 @@ def _register_face(doc: fitz.Document, page: fitz.Page, entry: _FaceEntry,
                    used: dict[int, tuple[str, float]]) -> str:
     face = entry.face
     name = f"PSS{face.id}"
-    xref = fontres.find_tagged_font(doc, face.id)
+    on_page = pdfobj.resource_exists(doc, page, "Font", name)
+    # The page's own resource is the usual hit; only a face new to the page scans the file.
+    xref = fontres.find_tagged_font(doc, face.id, pdfobj.ref_xref(on_page) if on_page else None)
     if xref is None:
         xref = fontembed.insert_face(page, name, entry.file, used)
         fontres.tag_font(doc, xref, face.id)
         _rename_inserted_font(doc, xref, face)
         return name
-    if pdfobj.resource_exists(doc, page, "Font", name) is None:
+    if on_page is None:
         pdfobj.add_resource(doc, page, "Font", name, f"{xref} 0 R")
     fontembed.ensure_glyphs(doc, xref, entry.file, used)
     return name
