@@ -8,13 +8,12 @@ function time(ts: number): string {
 }
 
 export function HistoryPanel() {
-  const { doc, setDoc, track, run } = useEditor();
+  const { doc, moveInHistory, run } = useEditor();
   if (!doc) return null;
 
   const jump = async (index: number) => {
     await flushEdit();
-    const info = await track(() => api.jump(doc.id, index));
-    if (info) setDoc(info);
+    await moveInHistory(index);
   };
 
   return (

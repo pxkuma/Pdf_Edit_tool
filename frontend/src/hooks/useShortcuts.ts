@@ -29,8 +29,6 @@ async function deleteSelection(): Promise<void> {
 
 export function useShortcuts(): void {
   useEffect(() => {
-    let spaceTool: Tool | null = null;
-
     const onKeyDown = (event: KeyboardEvent) => {
       const state = useEditor.getState();
       if (!state.doc || state.dialog) return;
@@ -93,8 +91,7 @@ export function useShortcuts(): void {
       }
       if (event.key === " " && state.tool !== "pan" && !event.repeat) {
         event.preventDefault();
-        spaceTool = state.tool;
-        state.setTool("pan");
+        state.holdTool("pan"); // keeps the selection and the open editor, unlike choosing the Pan tool
         return;
       }
       if (event.key === "?") {
@@ -108,17 +105,18 @@ export function useShortcuts(): void {
     };
 
     const onKeyUp = (event: KeyboardEvent) => {
-      if (event.key === " " && spaceTool) {
-        useEditor.getState().setTool(spaceTool);
-        spaceTool = null;
-      }
+      if (event.key === " ") useEditor.getState().releaseTool();
     };
+
+    const onBlur = () => useEditor.getState().releaseTool(); // a key released outside the window never arrives
 
     window.addEventListener("keydown", onKeyDown);
     window.addEventListener("keyup", onKeyUp);
+    window.addEventListener("blur", onBlur);
     return () => {
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("blur", onBlur);
     };
   }, []);
 }
