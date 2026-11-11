@@ -5,6 +5,7 @@ from __future__ import annotations
 import datetime as dt
 import math
 import re
+import secrets
 from dataclasses import dataclass
 
 import pymupdf as fitz
@@ -321,7 +322,8 @@ def export_pdf(payload: bytes, options: ExportOptions) -> bytes:
             save_args.update(
                 encryption=fitz.PDF_ENCRYPT_AES_256,
                 user_pw=options.user_password,
-                owner_pw=options.owner_password or options.user_password,
+                # Without a separate owner password the user password would also unlock every restriction.
+                owner_pw=options.owner_password or secrets.token_urlsafe(24),  # 32 chars; MuPDF allows 40
                 permissions=permissions,
             )
         return doc.tobytes(**save_args)

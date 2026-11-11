@@ -259,8 +259,8 @@ class ExportBody(BaseModel):
     image_quality: int = Field(75, ge=10, le=95)
     flatten_annotations: bool = False
     flatten_forms: bool = False
-    user_password: str = Field("", max_length=128)
-    owner_password: str = Field("", max_length=128)
+    user_password: str = Field("", max_length=40)  # MuPDF rejects longer passwords
+    owner_password: str = Field("", max_length=40)
     allow_print: bool = True
     allow_copy: bool = True
     allow_modify: bool = True
