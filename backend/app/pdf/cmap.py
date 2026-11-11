@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import re
 
-import pymupdf as fitz
+from . import encodings
 
 _HEX = r"<([0-9A-Fa-f\s]*)>"
 _BFCHAR_BLOCK = re.compile(r"beginbfchar(.*?)endbfchar", re.S)
@@ -94,54 +94,41 @@ def _add_range(mapping: dict[bytes, str], lo: bytes, hi: bytes, dst: str) -> Non
             mapping[(start + offset).to_bytes(width, "big")] = text
 
 
-def _base_encoding_table(name: str) -> dict[int, str]:
-    codec = {
-        "WinAnsiEncoding": "cp1252",
-        "MacRomanEncoding": "mac_roman",
-        "StandardEncoding": "latin-1",
-        "PDFDocEncoding": "latin-1",
-    }.get(name, "cp1252")
-    table: dict[int, str] = {}
-    for code in range(32, 256):
-        try:
-            char = bytes([code]).decode(codec)
-        except UnicodeDecodeError:
-            continue
-        if char.isprintable():
-            table[code] = char
-    return table
-
-
-def _glyph_to_unicode(glyph: str) -> str:
-    try:
-        value = fitz.glyph_name_to_unicode(glyph)
-    except Exception:  # noqa: BLE001 - PyMuPDF raises generic errors here
-        value = 0xFFFD
-    if value and value != 0xFFFD and value > 0:
-        return chr(value)
-    match = re.fullmatch(r"(?:uni|u)([0-9A-Fa-f]{4,6})", glyph)
-    if match:
-        return chr(int(match.group(1), 16))
-    return ""
-
-
-def parse_differences(differences: str) -> dict[int, str]:
-    """Parse an /Differences array: ``[ 32 /space /exclam 65 /A ]``."""
-    result: dict[int, str] = {}
+def parse_difference_names(differences: str) -> encodings.GlyphTable:
+    """Parse an /Differences array: ``[ 32 /space /exclam 65 /A ]`` -> code -> glyph name."""
+    result: encodings.GlyphTable = {}
     code = 0
-    for token in re.findall(r"/[^\s/\[\]]+|\d+", differences):
+    for token in re.findall(r"/[^\s/\[\]<>()]*|\d+", differences):
         if token.startswith("/"):
-            char = _glyph_to_unicode(token[1:].replace("#20", " "))
-            if char:
-                result[code] = char
+            if 0 <= code < 256:
+                result[code] = _decode_name(token[1:])
             code += 1
         else:
             code = int(token)
     return result
 
 
-def simple_encoding_map(base_name: str, differences: str | None) -> dict[bytes, str]:
-    table = _base_encoding_table(base_name)
+def _decode_name(name: str) -> str:
+    return re.sub(r"#([0-9A-Fa-f]{2})", lambda m: chr(int(m.group(1), 16)), name)
+
+
+def parse_differences(differences: str) -> dict[int, str]:
+    """Parse an /Differences array into code -> unicode text."""
+    return encodings.to_unicode_table(parse_difference_names(differences))
+
+
+def simple_glyph_names(base: encodings.GlyphTable, differences: str | None) -> encodings.GlyphTable:
+    table = dict(base)
     if differences:
-        table.update(parse_differences(differences))
-    return {bytes([code]): char for code, char in table.items()}
+        table.update(parse_difference_names(differences))
+    return table
+
+
+def simple_encoding_map(base_name: str, differences: str | None) -> dict[bytes, str]:
+    """Code -> unicode for a named base encoding plus /Differences (unknown names: empty base)."""
+    names = simple_glyph_names(encodings.base_glyph_table(base_name), differences)
+    return glyph_table_to_map(names)
+
+
+def glyph_table_to_map(names: encodings.GlyphTable) -> dict[bytes, str]:
+    return {bytes([code]): text for code, text in encodings.to_unicode_table(names).items()}

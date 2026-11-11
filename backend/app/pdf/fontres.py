@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 
 import pymupdf as fitz
 
-from . import cmap, fontcheck, pdfobj
+from . import cmap, encodings, fontcheck, fontprog, pdfobj
 
 SUBSET_PREFIX = re.compile(r"^[A-Z]{6}\+")
 TAG_KEY = "PDFStudioFont"
@@ -162,18 +162,15 @@ def _analyze_simple(doc: fitz.Document, xref: int, base: str, subtype: str, veri
     widths_list = pdfobj.read_number_array(doc, xref, "Widths")
     start = int(first_char[0]) if first_char else 0
     widths = {bytes([start + i]): w for i, w in enumerate(widths_list) if 0 <= start + i < 256}
-    # ToUnicode is authoritative: in subset fonts it lists exactly the glyphs present.
-    # Without it we fall back to the encoding, keeping only codes with a real width
-    # so we never emit a code whose glyph was stripped by the subsetter.
-    mapping, _ = _tounicode(doc, xref)
-    if not mapping:
-        mapping = _simple_encoding(doc, xref)
-        if widths:
-            mapping = {code: ch for code, ch in mapping.items() if widths.get(code, 0) > 0 or ch == " "}
-    reverse = _invert({k: v for k, v in mapping.items() if len(k) == 1})
     embedded = subtype == "Type3" or _has_font_file(doc, xref)
-    if embedded and verify and subtype == "TrueType":
-        reverse = fontcheck.filter_simple_truetype(doc, xref, reverse)
+    # The program is needed to verify glyphs, or for its built-in encoding.
+    needs_program = verify or pdfobj.get_key(doc, xref, "ToUnicode")[0] == "null"
+    program = fontprog.load(doc, xref) if embedded and needs_program and subtype != "Type3" else None
+    try:
+        reverse = _simple_reverse(doc, xref, base, subtype, widths, program, verify)
+    finally:
+        if program is not None:
+            program.close()
     scale = 1.0
     if subtype == "Type3":
         matrix = pdfobj.read_number_array(doc, xref, "FontMatrix")
@@ -194,18 +191,56 @@ def _analyze_simple(doc: fitz.Document, xref: int, base: str, subtype: str, veri
     return font
 
 
-def _simple_encoding(doc: fitz.Document, xref: int) -> dict[bytes, str]:
+def _simple_reverse(doc: fitz.Document, xref: int, base: str, subtype: str, widths: dict[bytes, float],
+                    program: fontprog.FontProgram | None, verify: bool) -> dict[str, bytes]:
+    # ToUnicode is authoritative: in subset fonts it lists exactly the glyphs present.
+    # Without it we fall back to the encoding, keeping only codes with a real width
+    # so we never emit a code whose glyph was stripped by the subsetter.
+    mapping, _ = _tounicode(doc, xref)
+    glyph_names: encodings.GlyphTable | None = None
+    if not mapping:
+        glyph_names = _encoding_glyphs(doc, xref, base, program)
+        mapping = cmap.glyph_table_to_map(glyph_names)
+        if widths:
+            mapping = {code: ch for code, ch in mapping.items() if widths.get(code, 0) > 0 or ch == " "}
+    reverse = _invert({k: v for k, v in mapping.items() if len(k) == 1})
+    if program is not None and verify:
+        if glyph_names is None:
+            glyph_names = _encoding_glyphs(doc, xref, base, program)
+        reverse = fontcheck.filter_simple(program, reverse, glyph_names, fontcheck.is_symbolic(doc, xref))
+    return reverse
+
+
+def _encoding_glyphs(doc: fitz.Document, xref: int, base: str,
+                     program: fontprog.FontProgram | None) -> encodings.GlyphTable:
+    """Code -> glyph name of a simple font (ISO 32000-1 9.6.6: base encoding + /Differences)."""
     kind, value = pdfobj.get_key(doc, xref, "Encoding")
     if kind == "name":
-        return cmap.simple_encoding_map(value.lstrip("/"), None)
+        return encodings.base_glyph_table(value.lstrip("/"))
     if kind in ("dict", "xref"):
         target = pdfobj.ref_xref(value) if kind == "xref" else xref
+        if target is None:
+            return {}
         prefix = "" if kind == "xref" else "Encoding/"
-        base = pdfobj.read_name(doc, target, f"{prefix}BaseEncoding") or "StandardEncoding"
+        base_name = pdfobj.read_name(doc, target, f"{prefix}BaseEncoding")
+        table = encodings.base_glyph_table(base_name) if base_name else _builtin_glyphs(base, program)
         diff_kind, diff_value, _ = pdfobj.resolve(doc, target, f"{prefix}Differences")
-        differences = diff_value if diff_kind != "null" else None
-        return cmap.simple_encoding_map(base, differences)
-    return cmap.simple_encoding_map("StandardEncoding", None)
+        return cmap.simple_glyph_names(table, diff_value if diff_kind != "null" else None)
+    return _builtin_glyphs(base, program)
+
+
+def _builtin_glyphs(base: str, program: fontprog.FontProgram | None) -> encodings.GlyphTable:
+    """The font's built-in encoding: the program's own, else StandardEncoding.
+
+    Symbol and ZapfDingbats have private built-in encodings we do not decode:
+    an empty table makes the editor use a substitute instead of wrong glyphs.
+    """
+    if program is not None:
+        return program.builtin_encoding() or {}
+    lowered = clean_font_name(base).lower()
+    if lowered.startswith(("symbol", "zapfdingbats", "dingbats", "wingdings", "webdings")):
+        return {}
+    return encodings.base_glyph_table("StandardEncoding")
 
 
 _BASE14_PREFIX = {"courier": "co", "helvetica": "he", "arial": "he", "times": "ti"}
