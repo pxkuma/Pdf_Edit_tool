@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from fontkit import add_stream, descriptor, raw_page, tounicode
 
-from app.pdf import cmap, fontres
+from app.pdf import cmap, fontres, textstate
 
 HELLO = b"BT /F1 24 Tf 72 700 Td <0041> Tj ET"
 
@@ -96,3 +96,17 @@ def test_bfrange_with_ligature_destination_increments_the_last_character():
             "1 beginbfrange <10> <11> <00660066> endbfrange endcmap")
     assert cmap.parse_tounicode(text) == {b"\x10": "ff", b"\x11": "fg"}
 
+
+
+def test_predefined_ucs2_cmap_fonts_have_two_byte_codes():
+    # C9: UniGB-UCS2-H text was read as 1-byte codes at 0.5 em, so every later
+    # text record on the line had a wrong origin.
+    content = b"BT /F1 20 Tf 72 700 Td <4E2D6587> Tj <4E2D> Tj ET"
+    doc, page = raw_page("<<>>", content, (_type0("UniGB-UCS2-H", widths="/DW 1000"),))
+    xref = page.get_fonts()[0][0]
+    font = fontres.analyze_font(doc, xref, verify=False)
+    assert font is not None and font.code_bytes == 2
+    assert font.width_of(b"\x4e\x2d") == 1000
+    assert fontres.analyze_font(doc, xref).reverse == {}  # CIDs are unknown: never write with it
+    records = textstate.page_text_records(doc, page)
+    assert [round(r.origin[0], 1) for r in records] == [72.0, 112.0]  # 2 glyphs x 1 em x 20 pt

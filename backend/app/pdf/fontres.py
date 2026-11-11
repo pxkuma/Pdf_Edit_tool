@@ -166,7 +166,7 @@ def _with_code_length(mapping: dict[bytes, str], length: int) -> dict[bytes, str
 def _analyze_type0(doc: fitz.Document, xref: int, base: str, verify: bool = True) -> EmbeddedFont | None:
     encoding = pdfobj.read_name(doc, xref, "Encoding")
     if encoding not in ("Identity-H", "Identity-V"):
-        return None
+        return _predefined_type0(doc, xref, base, encoding)
     mapping, _ = read_tounicode(doc, xref)
     descendant = pdfobj.first_array_ref(doc, xref, "DescendantFonts")
     widths: dict[bytes, float] = {}
@@ -195,6 +195,27 @@ def _analyze_type0(doc: fitz.Document, xref: int, base: str, verify: bool = True
         forward=_with_code_length(mapping, 2),
     )
     return font
+
+
+# Predefined CMaps whose codes are all 2 bytes (UCS-2 / UTF-16 for the BMP).
+_TWO_BYTE_CMAP = re.compile(r"^Uni[A-Za-z]+-(?:UCS2|UTF16)(?:-HW)?-[HV]$")
+
+
+def _predefined_type0(doc: fitz.Document, xref: int, base: str, encoding: str) -> EmbeddedFont | None:
+    """A Type0 font with a predefined 2-byte CMap such as UniGB-UCS2-H.
+
+    Without the Adobe CMap files the code -> CID mapping (and so the /W widths
+    and glyph presence) is unknown: the font is never written with, but its code
+    length and default width keep the positions of later text on the line right.
+    Other predefined CMaps (mixed 1/2-byte codes such as 90ms-RKSJ-H) give None.
+    """
+    if not _TWO_BYTE_CMAP.match(encoding):
+        return None
+    descendant = pdfobj.first_array_ref(doc, xref, "DescendantFonts")
+    dw = pdfobj.read_number_array(doc, descendant, "DW") if descendant is not None else []
+    return EmbeddedFont(xref=xref, base_name=base, subtype="Type0", code_bytes=2,
+                        default_width=dw[0] if dw else 1000.0,
+                        embedded=descendant is not None and _has_font_file(doc, descendant))
 
 
 _W_TOKEN = re.compile(r"(\d+)\s+\d+\s+R|\[|\]|[-+]?\d*\.?\d+")
