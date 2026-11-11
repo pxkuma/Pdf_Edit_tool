@@ -24,7 +24,8 @@ from .fontres import clean_font_name, normalize_font_name
 log = logging.getLogger(__name__)
 
 FONT_EXTENSIONS = fontfiles.FONT_EXTENSIONS
-# Width/weight variants that only clutter the picker.
+# Width/weight *styles* that only clutter the picker. Applied to style names only:
+# whole families such as "Playfair Display" or "Roboto Condensed" stay listed.
 _SKIP_STYLE = re.compile(r"condensed|semicondensed|extracondensed|display|ui\b|thin|extralight", re.I)
 
 
@@ -73,6 +74,20 @@ ALIASES: dict[str, str] = {
     "notoserif": "Noto Serif",
     "dejavusans": "DejaVu Sans",
     "dejavuserif": "DejaVu Serif",
+}
+
+# Name parts that make a font a different *kind* than its family's alias target.
+_NAME_KIND = {
+    "mono": re.compile(r"mono|typewriter|console"),
+    "narrow": re.compile(r"narrow|compressed"),
+    "condensed": re.compile(r"cond"),
+    "cjk": re.compile(r"cjk"),
+}
+_KIND_FAMILY_WORDS = {
+    "mono": ("Mono",),
+    "narrow": ("Narrow", "Condensed"),
+    "condensed": ("Condensed", "Narrow"),
+    "cjk": ("CJK SC", "CJK JP", "CJK KR", "CJK TC"),
 }
 
 _BOLD_WORDS = ("bold", "black", "heavy", "semibold", "demibold", "extrabold")
@@ -178,6 +193,7 @@ class FontCatalog:
         self._faces: list[FontFace] | None = None
         self._lock = threading.Lock()
         self._opened: dict[str, fitz.Font | None] = {}
+        self._fallbacks: dict[tuple[int, bool, bool, bool], tuple[FontFace, ...]] = {}
         self.version = 0  # bumped whenever fonts are added
 
     def faces(self) -> list[FontFace]:
@@ -230,8 +246,7 @@ class FontCatalog:
         for directory in self._dirs:
             if directory.exists():
                 files.extend(
-                    p for p in directory.rglob("*")
-                    if p.suffix.lower() in FONT_EXTENSIONS and not _SKIP_STYLE.search(p.stem)
+                    p for p in directory.rglob("*") if p.suffix.lower() in FONT_EXTENSIONS
                 )
         return sorted(files)
 
@@ -305,22 +320,57 @@ class FontCatalog:
         for candidate in (key, base_key):
             if candidate in ALIASES and ALIASES[candidate] in families:
                 return self.pick_variant(ALIASES[candidate], bold, italic)
-        for alias, family in ALIASES.items():
-            if base_key.startswith(alias) and family in families:
-                return self.pick_variant(family, bold, italic)
+        aliased = self._alias_family(base_key)
+        if aliased:
+            return self.pick_variant(aliased, bold, italic)
+        mono = mono or _NAME_KIND["mono"].search(key) is not None
+        serif = serif or ("serif" in key and "sans" not in key)
         fallback = "Liberation Mono" if mono else ("Liberation Serif" if serif else "Liberation Sans")
         if fallback in families:
             return self.pick_variant(fallback, bold, italic)
         faces = self.faces()
         return faces[0] if faces else None
 
-    def coverage_fallbacks(self) -> list[FontFace]:
-        """Faces tried, in order, for characters the primary font lacks."""
-        preferred = ("Noto Sans", "DejaVu Sans", "Noto Serif")
+    def _alias_family(self, base_key: str) -> str | None:
+        """Installed family for a name that *starts* with an alias ("ArialNarrow").
+
+        The longest alias wins. A name of another kind than the alias target
+        (mono, narrow, condensed, CJK) only maps to a family of that same kind,
+        e.g. "Liberation Sans Narrow", never to the proportional/wide family.
+        """
         families = self.families()
-        ordered = [self.pick_variant(name, False, False) for name in preferred if name in families]
-        noto_scripts = [
-            f for f in self.faces()
-            if f.family.startswith("Noto Sans ") and not f.bold and not f.italic
-        ]
-        return [face for face in ordered if face] + noto_scripts
+        for alias in sorted(ALIASES, key=len, reverse=True):
+            family = ALIASES[alias]
+            if not base_key.startswith(alias) or family not in families:
+                continue
+            rest = base_key[len(alias):]
+            kinds = [kind for kind, pattern in _NAME_KIND.items() if pattern.search(rest)]
+            if not kinds:
+                return family
+            for kind in kinds:
+                match = next((f"{family} {word}" for word in _KIND_FAMILY_WORDS[kind]
+                              if f"{family} {word}" in families), None)
+                if match:
+                    return match
+            return None
+        return None
+
+    def coverage_fallbacks(self, bold: bool = False, italic: bool = False, serif: bool = False) -> tuple[FontFace, ...]:
+        """Faces tried, in order, for characters the primary font lacks.
+
+        They follow the primary text's weight, slant and serif class, so a missing
+        character in bold serif text is drawn in bold serif too. Cached per catalog version.
+        """
+        key = (self.version, bold, italic, serif)
+        cached = self._fallbacks.get(key)
+        if cached is not None:
+            return cached
+        preferred = ("Noto Serif", "DejaVu Serif", "Noto Sans", "DejaVu Sans") if serif else (
+            "Noto Sans", "DejaVu Sans", "Noto Serif")
+        families = self.families()
+        ordered = [self.pick_variant(name, bold, italic) for name in preferred if name in families]
+        scripts = [self.pick_variant(name, bold, False) for name in sorted(families, key=str.lower)
+                   if name.startswith("Noto Sans ") and name not in preferred]
+        result = tuple(dict.fromkeys(face for face in ordered + scripts if face))
+        self._fallbacks = {k: v for k, v in self._fallbacks.items() if k[0] == self.version} | {key: result}
+        return result

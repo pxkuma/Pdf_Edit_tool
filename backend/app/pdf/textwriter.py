@@ -109,7 +109,9 @@ class FontChain:
     ) -> "FontChain":
         faces: list[FontFace] = [primary] if primary else []
         if include_coverage:
-            faces += [face for face in catalog.coverage_fallbacks() if face not in faces]
+            fallbacks = catalog.coverage_fallbacks(primary.bold, primary.italic, primary.serif) if primary \
+                else catalog.coverage_fallbacks()
+            faces += [face for face in fallbacks if face not in faces]
         return cls(embedded=embedded, faces=[_FaceEntry(face, catalog) for face in faces])
 
     def encode(self, text: str) -> list[Glyph]:
