@@ -10,10 +10,11 @@ from dataclasses import dataclass
 
 import pymupdf as fitz
 
-from . import extract
+from . import extract, redaction
 from .fonts import FontCatalog
 from .geometry import from_display_point, from_display_rect, from_display_vector, hex_to_rgb, to_display_rect
-from .textedit import SpanEdit, StyleRequest, TextEditError, edit_span, plan_fonts, redact_areas
+from .redaction import redact_areas
+from .textedit import SpanEdit, StyleRequest, TextEditError, edit_span, plan_fonts
 from .textwriter import PlacedLine, TextStyle, line_width, write_lines
 
 POSITIONS = {"top-left", "top-center", "top-right", "bottom-left", "bottom-center", "bottom-right"}
@@ -209,13 +210,20 @@ def _spans_matching(page: fitz.Page, pattern: re.Pattern) -> list[tuple]:
     return result
 
 
-def redact(doc: fitz.Document, page: fitz.Page, rects: list[tuple], mode: str, color: str) -> None:
-    """mode: 'redact' (remove everything, fill), 'whiteout' (remove text, fill), 'text' (remove text only)."""
+def redact(doc: fitz.Document, page: fitz.Page, rects: list[tuple], mode: str, color: str,
+           sanitize: bool = False) -> dict:
+    """mode: 'redact' (remove everything, fill), 'whiteout' (remove text, fill), 'text' (remove text only).
+
+    A true redaction also deletes the comments, form fields and links under the area. With
+    ``sanitize`` the document's metadata, attachments and scripts are removed as well.
+    """
     targets = [from_display_rect(page, r) for r in rects]
     targets = [r for r in targets if not r.is_empty and r.width > 0.5 and r.height > 0.5]
     if not targets:
         raise ToolError("Select an area first.")
+    removed = _no_removals()
     if mode == "redact":
+        removed = redaction.clear_under(page, targets)
         redact_areas(page, targets, fill=hex_to_rgb(color, (0, 0, 0)),
                      images=fitz.PDF_REDACT_IMAGE_PIXELS, graphics=fitz.PDF_REDACT_LINE_ART_REMOVE_IF_TOUCHED)
     elif mode == "whiteout":
@@ -225,21 +233,35 @@ def redact(doc: fitz.Document, page: fitz.Page, rects: list[tuple], mode: str, c
         redact_areas(page, targets, fill=False)
     else:
         raise ToolError("Unknown redaction mode.")
+    return {**removed, "sanitized": _sanitize_if(doc, sanitize)}
 
 
-def redact_search(doc: fitz.Document, query: str, pages: list[int], color: str) -> dict:
+def redact_search(doc: fitz.Document, query: str, pages: list[int], color: str, sanitize: bool = False) -> dict:
     if not query.strip():
         raise ToolError("Search text is empty.")
     count, changed = 0, set()
+    removed = _no_removals()
     for index in pages:
         page = doc[index]
         rects = page.search_for(query)
         if rects:
+            cleared = redaction.clear_under(page, rects)
+            removed = {key: removed[key] + cleared[key] for key in removed}
             redact_areas(page, rects, fill=hex_to_rgb(color, (0, 0, 0)),
                          images=fitz.PDF_REDACT_IMAGE_PIXELS, graphics=fitz.PDF_REDACT_LINE_ART_NONE)
             count += len(rects)
             changed.add(index)
-    return {"redacted": count, "pages": sorted(changed)}
+    return {"redacted": count, "pages": sorted(changed), **removed, "sanitized": _sanitize_if(doc, sanitize)}
+
+
+def _no_removals() -> dict[str, int]:
+    return {"annotations": 0, "fields": 0, "links": 0}
+
+
+def _sanitize_if(doc: fitz.Document, requested: bool) -> bool:
+    if requested:
+        redaction.sanitize(doc)
+    return requested
 
 
 def get_metadata(doc: fitz.Document) -> dict:

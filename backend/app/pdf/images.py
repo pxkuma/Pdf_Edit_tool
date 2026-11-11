@@ -7,7 +7,7 @@ import re
 import pymupdf as fitz
 
 from .geometry import from_display_rect, to_display_rect
-from .textedit import redact_areas
+from .redaction import redact_areas
 
 MAX_IMAGE_BYTES = 40 * 1024 * 1024
 

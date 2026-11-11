@@ -20,6 +20,7 @@ import pymupdf as fitz
 
 from .fonts import FontCatalog
 from .geometry import from_display_point, from_display_vector
+from .redaction import redact_areas
 from .textwriter import FontChain, PlacedLine, TextStyle, line_width, write_lines
 
 log = logging.getLogger(__name__)
@@ -177,9 +178,8 @@ def page_scan_info(page: fitz.Page) -> dict:
 
 
 def remove_invisible_text(page: fitz.Page) -> None:
-    page.add_redact_annot(page.rect, fill=False)
-    page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE, graphics=fitz.PDF_REDACT_LINE_ART_NONE,
-                          text=fitz.PDF_REDACT_TEXT_REMOVE_INVISIBLE)
+    """Drop an earlier OCR layer. Marked-for-redaction annotations on the page are not applied."""
+    redact_areas(page, [page.rect], fill=False, text=fitz.PDF_REDACT_TEXT_REMOVE_INVISIBLE)
 
 
 # ------------------------------------------------------------------ editing scans

@@ -213,14 +213,15 @@ def flatten(doc_id: str, body: schemas.FlattenBody) -> dict:
 @router.post("/redact")
 def redact(doc_id: str, body: schemas.RedactBody) -> dict:
     label = {"redact": "Redacted area", "whiteout": "Whiteout", "text": "Erased text"}[body.mode]
-    operation = single_page(body.page, lambda doc, pg: doctools.redact(doc, pg, list(body.rects), body.mode, body.color))
+    operation = single_page(body.page, lambda doc, pg: doctools.redact(doc, pg, list(body.rects), body.mode, body.color, body.sanitize))
     return mutate(doc_id, label, operation)
 
 
 @router.post("/redact/search")
 def redact_search(doc_id: str, body: schemas.RedactSearchBody) -> dict:
     def run(doc):
-        result = doctools.redact_search(doc, body.query, doctools.resolve_pages(doc, body.pages), body.color)
+        result = doctools.redact_search(doc, body.query, doctools.resolve_pages(doc, body.pages), body.color,
+                                        body.sanitize)
         return Mutation(changed=frozenset(result["pages"]), result=result)
 
     return mutate(doc_id, f"Redacted “{_preview(body.query)}”", run)

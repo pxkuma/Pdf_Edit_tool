@@ -175,12 +175,14 @@ class RedactBody(BaseModel):
     rects: list[Rect] = Field(min_length=1, max_length=1000)
     mode: Literal["redact", "whiteout", "text"] = "redact"
     color: str = Field("#000000", pattern=HEX_COLOR)
+    sanitize: bool = False  # also remove metadata, XMP, bookmarks, attachments and scripts
 
 
 class RedactSearchBody(BaseModel):
     query: str = Field(min_length=1, max_length=500)
     pages: str | None = Field(None, max_length=500)
     color: str = Field("#000000", pattern=HEX_COLOR)
+    sanitize: bool = False  # also remove metadata, XMP, bookmarks, attachments and scripts
 
 
 class StampStyleBody(BaseModel):
