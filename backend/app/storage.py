@@ -148,6 +148,18 @@ def serialize(doc: fitz.Document) -> bytes:
     return doc.tobytes(garbage=1, deflate=True, encryption=fitz.PDF_ENCRYPT_NONE)
 
 
+def has_signatures(doc: fitz.Document) -> bool:
+    """The document carries digital signatures whose signed bytes must not be rewritten."""
+    if not doc.is_pdf or doc.get_sigflags() < 1:
+        return False
+    return any(w.is_signed for page in doc for w in page.widgets(types=[fitz.PDF_WIDGET_TYPE_SIGNATURE]))
+
+
+def keeps_original_bytes(doc: fitz.Document, encrypted: bool) -> bool:
+    """Store an upload as-is when rewriting it would break its digital signatures."""
+    return not encrypted and doc.is_pdf and not doc.is_repaired and has_signatures(doc)
+
+
 class DocumentStore:
     def __init__(self, root: Path, max_history: int) -> None:
         self.root = root
@@ -194,7 +206,7 @@ class DocumentStore:
         with PDF_LOCK:
             doc, encrypted = _load_any(data, password)
             try:
-                payload = serialize(doc)
+                payload = data if keeps_original_bytes(doc, encrypted) else serialize(doc)
                 pages = doc.page_count
             finally:
                 doc.close()
@@ -266,19 +278,58 @@ class DocumentStore:
     def mutate(self, doc_id: str, label: str, operation: Callable[[fitz.Document], Mutation | None]) -> tuple[DocState, Any]:
         with PDF_LOCK:
             state = self.get(doc_id)
-            doc = fitz.open(self.version_path(state))
-            try:
-                old_count = doc.page_count
-                mutation = operation(doc) or Mutation()
-                if doc.page_count == 0:
-                    raise InvalidDocument("A document must keep at least one page.")
-                payload = serialize(doc)
-                new_count = doc.page_count
-            finally:
+            source = self.version_path(state)
+            doc = fitz.open(source)
+            if has_signatures(doc):
                 doc.close()
+                payload, mutation, old_count, new_count = self._mutate_incrementally(source, operation)
+            else:
+                try:
+                    old_count = doc.page_count
+                    mutation = _run_operation(doc, operation)
+                    payload = serialize(doc)
+                    new_count = doc.page_count
+                finally:
+                    doc.close()
             tokens = _next_tokens(state.current.tokens, old_count, new_count, mutation)
             new_state = self._append_version(state, label, payload, tokens)
             return new_state, mutation.result
+
+    def _mutate_incrementally(self, source: Path, operation: Callable[[fitz.Document], Mutation | None]) -> tuple[bytes, Mutation, int, int]:
+        """Apply an edit to a signed document as an appended revision (like Acrobat).
+
+        The signed bytes stay untouched, so each signature still validates for the revision it
+        signed and validation reports the later changes. MuPDF can only append to the file it
+        opened, so the edit runs on a scratch copy next to the versions.
+        """
+        scratch = source.with_name(f"incr-{secrets.token_hex(6)}.pdf")
+        shutil.copyfile(source, scratch)
+        try:
+            doc = fitz.open(scratch)
+            try:
+                old_count = doc.page_count
+                mutation = _run_operation(doc, operation)
+                new_count = doc.page_count
+                if doc.can_save_incrementally():
+                    doc.saveIncr()
+                    payload = scratch.read_bytes()
+                else:
+                    # MuPDF refuses to append after a redaction (text edits remove glyphs that way):
+                    # the removed content would survive in the signed revision. So the file is
+                    # rewritten, and the signatures stop validating, as the user was warned.
+                    payload = serialize(doc)
+            finally:
+                doc.close()
+        finally:
+            scratch.unlink(missing_ok=True)
+        return payload, mutation, old_count, new_count
+
+    def replace_if_current(self, doc_id: str, expected_file: str, label: str, payload: bytes) -> DocState:
+        """``replace_document`` unless another change landed since ``expected_file`` was read."""
+        with PDF_LOCK:
+            if self.get(doc_id).current.file != expected_file:
+                raise InvalidDocument("The document changed while it was being signed. Please sign again.")
+            return self.replace_document(doc_id, label, payload)
 
     def _append_version(self, state: DocState, label: str, payload: bytes, tokens: tuple[str, ...]) -> DocState:
         directory = self._dir(state.id)
@@ -322,6 +373,13 @@ class DocumentStore:
         with PDF_LOCK:
             state = self.get(doc_id)
             return self.jump(doc_id, state.cursor + 1) if state.can_redo else state
+
+
+def _run_operation(doc: fitz.Document, operation: Callable[[fitz.Document], Mutation | None]) -> Mutation:
+    mutation = operation(doc) or Mutation()
+    if doc.page_count == 0:
+        raise InvalidDocument("A document must keep at least one page.")
+    return mutation
 
 
 def _next_tokens(old: tuple[str, ...], old_count: int, new_count: int, mutation: Mutation) -> tuple[str, ...]:

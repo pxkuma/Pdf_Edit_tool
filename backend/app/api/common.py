@@ -10,6 +10,7 @@ from starlette.concurrency import run_in_threadpool
 
 from .. import deps
 from ..pdf.pages import page_info
+from ..pdf.sigfields import signed_count
 from ..storage import PDF_LOCK, DocState, Mutation
 
 
@@ -29,6 +30,7 @@ def doc_info(state: DocState) -> dict:
         pages = page_info(doc)
         metadata_title = (doc.metadata or {}).get("title", "")
         has_forms = bool(doc.is_form_pdf)
+        signatures = signed_count(doc)
     for page, token in zip(pages, latest.current.tokens):
         page["token"] = token
     return {
@@ -43,6 +45,7 @@ def doc_info(state: DocState) -> dict:
         "history": [{"label": v.label, "ts": v.ts} for v in latest.versions],
         "wasEncrypted": latest.was_encrypted,
         "hasForms": has_forms,
+        "signatures": signatures,
     }
 
 

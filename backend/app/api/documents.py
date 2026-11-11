@@ -18,7 +18,7 @@ from .. import deps
 from ..pdf import doctools, textedit
 from ..pdf.doctools import ExportOptions
 from ..pdf.pages import extract as extract_pages
-from ..storage import PDF_LOCK, Mutation
+from ..storage import PDF_LOCK, Mutation, has_signatures
 from . import schemas
 from .common import doc_info, mutate, ok, read_upload
 
@@ -130,9 +130,13 @@ def revert(doc_id: str) -> dict:
 @router.post("/documents/{doc_id}/export")
 def export(doc_id: str, body: schemas.ExportBody) -> Response:
     store = deps.store()
-    state = store.get(doc_id)
     with PDF_LOCK:
-        data = doctools.export_pdf(store.current_bytes(doc_id), ExportOptions(**body.model_dump()))
+        state, doc = store.open_current(doc_id)
+        payload = store.version_path(state).read_bytes()
+        if body.keep_signatures and has_signatures(doc):
+            data = payload  # any rewrite (optimize, encrypt, flatten) would break the signatures
+        else:
+            data = doctools.export_pdf(payload, ExportOptions(**body.model_dump(exclude={"keep_signatures"})))
     return _download(data, state.filename if state.filename.lower().endswith(".pdf") else f"{state.filename}.pdf", "application/pdf")
 
 

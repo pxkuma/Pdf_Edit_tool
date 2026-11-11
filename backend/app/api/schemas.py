@@ -268,6 +268,8 @@ class ExportBody(BaseModel):
     allow_modify: bool = True
     allow_annotate: bool = True
     remove_metadata: bool = False
+    # A signed document is downloaded byte-for-byte (other options ignored) so its signatures stay valid.
+    keep_signatures: bool = True
 
 
 class ExportImagesBody(BaseModel):
