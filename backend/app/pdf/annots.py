@@ -6,6 +6,7 @@ from dataclasses import dataclass
 
 import pymupdf as fitz
 
+from . import annotmeta
 from .geometry import color_to_hex, from_display_point, from_display_rect, hex_to_rgb, to_display_rect
 
 MARKUP = {"highlight", "underline", "strikeout", "squiggly"}
@@ -71,6 +72,7 @@ def add_markup(page: fitz.Page, kind: str, rects: list[tuple], style: AnnotStyle
     }[kind]
     annot = adder(quads=quads)
     _apply_style(annot, style, allow_fill=False)
+    annotmeta.stamp_new(annot, style.author)
     return annot.xref
 
 
@@ -84,6 +86,7 @@ def add_ink(page: fitz.Page, paths: list[list[tuple[float, float]]], style: Anno
         raise AnnotationError("Drawing is empty.")
     annot = page.add_ink_annot(converted)
     _apply_style(annot, style, allow_fill=False)
+    annotmeta.stamp_new(annot, style.author)
     return annot.xref
 
 
@@ -98,6 +101,7 @@ def add_shape(page: fitz.Page, kind: str, start: tuple, end: tuple, style: Annot
         if kind == "arrow":
             annot.set_line_ends(fitz.PDF_ANNOT_LE_NONE, fitz.PDF_ANNOT_LE_OPEN_ARROW)
         _apply_style(annot, style, allow_fill=kind == "arrow")
+        annotmeta.stamp_new(annot, style.author)
         return annot.xref
     rect = fitz.Rect(p1, p2)
     rect.normalize()
@@ -105,12 +109,14 @@ def add_shape(page: fitz.Page, kind: str, start: tuple, end: tuple, style: Annot
         raise AnnotationError("Shape is too small.")
     annot = page.add_rect_annot(rect) if kind == "rect" else page.add_circle_annot(rect)
     _apply_style(annot, style, allow_fill=True)
+    annotmeta.stamp_new(annot, style.author)
     return annot.xref
 
 
 def add_note(page: fitz.Page, point: tuple, style: AnnotStyle, icon: str = "Comment") -> int:
     annot = page.add_text_annot(from_display_point(page, point), style.contents or "", icon=icon)
     _apply_style(annot, style, allow_fill=False)
+    annotmeta.stamp_new(annot, style.author)
     return annot.xref
 
 
@@ -130,6 +136,7 @@ def add_textbox(page: fitz.Page, rect: tuple, text: str, size: float, style: Ann
     )
     annot.set_opacity(max(0.05, min(1.0, style.opacity)))
     annot.update()
+    annotmeta.stamp_new(annot, style.author)
     return annot.xref
 
 
@@ -144,8 +151,8 @@ def list_annotations(page: fitz.Page) -> list[dict]:
     items = []
     for annot in page.annots() or []:
         kind = annot.type[0]
-        if kind in SKIP_TYPES:
-            continue
+        if kind in SKIP_TYPES or annot.irt_xref:
+            continue  # replies and review states are part of their comment's thread, not objects on the page
         colors = annot.colors or {}
         info = annot.info or {}
         items.append({
@@ -174,10 +181,12 @@ def update_annotation(page: fitz.Page, xref: int, style: AnnotStyle, rect: tuple
             annot.set_info(content=style.contents)
         annot.update(text_color=hex_to_rgb(style.color) if style.color else None,
                      fill_color=hex_to_rgb(style.fill) if style.fill else None)
+        annotmeta.touch(annot)
         return annot.xref
     _apply_style(annot, style, allow_fill)
     if rect is not None:
         keep_rect(annot, from_display_rect(page, rect))
+    annotmeta.touch(annot)
     return annot.xref
 
 
@@ -229,12 +238,20 @@ def _copy_props(source: fitz.Annot, target: fitz.Annot) -> None:
     target.set_info(source.info)
 
 
+def _replace(page: fitz.Page, annot: fitz.Annot, new: fitz.Annot) -> fitz.Annot:
+    """Swap ``annot`` for ``new``: the replacement keeps the comment's name, dates and replies."""
+    annotmeta.copy_identity(annot, new)
+    replies = annotmeta.detach_replies(annot)  # deleting an annotation would delete its replies too
+    page.delete_annot(annot)
+    annotmeta.attach_replies(page.parent, replies, new)
+    new.update()
+    return new
+
+
 def _recreate_ink(page: fitz.Page, annot: fitz.Annot, strokes: list) -> fitz.Annot:
     new = page.add_ink_annot(strokes)
     _copy_props(annot, new)
-    page.delete_annot(annot)
-    new.update()
-    return new
+    return _replace(page, annot, new)
 
 
 def _recreate_line(page: fitz.Page, annot: fitz.Annot, p1: tuple, p2: tuple) -> fitz.Annot:
@@ -243,9 +260,7 @@ def _recreate_line(page: fitz.Page, annot: fitz.Annot, p1: tuple, p2: tuple) -> 
     _copy_props(annot, new)
     if line_ends:
         new.set_line_ends(*line_ends)
-    page.delete_annot(annot)
-    new.update()
-    return new
+    return _replace(page, annot, new)
 
 
 def delete_annotation(page: fitz.Page, xref: int) -> None:
