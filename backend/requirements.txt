@@ -4,3 +4,4 @@ uvicorn[standard]==0.54.0
 python-multipart==0.0.32
 pydantic==2.14.1
 fonttools==4.66.1
+pyHanko==0.38.1

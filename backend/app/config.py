@@ -20,6 +20,8 @@ class Settings:
     max_upload_mb: int
     max_history: int
     doc_ttl_hours: int
+    trust_roots_file: str | None = None  # extra PEM roots for signature validation (e.g. AATL)
+    allow_private_tsa: bool = False  # let timestamp URLs point at private/loopback addresses
 
     @property
     def docs_dir(self) -> Path:
@@ -45,4 +47,6 @@ def load_settings() -> Settings:
         max_upload_mb=_int_env("PDF_STUDIO_MAX_UPLOAD_MB", 200),
         max_history=_int_env("PDF_STUDIO_MAX_HISTORY", 60),
         doc_ttl_hours=_int_env("PDF_STUDIO_DOC_TTL_HOURS", 72),
+        trust_roots_file=os.environ.get("PDF_STUDIO_TRUST_ROOTS") or None,
+        allow_private_tsa=os.environ.get("PDF_STUDIO_ALLOW_PRIVATE_TSA", "").lower() in ("1", "true", "yes"),
     )
