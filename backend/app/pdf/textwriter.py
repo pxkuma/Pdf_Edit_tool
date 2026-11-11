@@ -76,8 +76,18 @@ class PlacedLine:
 
 @dataclass
 class _FaceEntry:
+    """A face of the chain; its font file is opened (and cached) on first use."""
+
     face: FontFace
-    font: fitz.Font
+    catalog: FontCatalog
+
+    @property
+    def font(self) -> fitz.Font | None:
+        return self.catalog.open_font(self.face)
+
+    @property
+    def file(self) -> str:
+        return self.catalog.face_file(self.face)
 
 
 @dataclass
@@ -100,13 +110,7 @@ class FontChain:
         faces: list[FontFace] = [primary] if primary else []
         if include_coverage:
             faces += [face for face in catalog.coverage_fallbacks() if face not in faces]
-        entries = []
-        for face in faces:
-            try:
-                entries.append(_FaceEntry(face, fitz.Font(fontfile=face.path)))
-            except Exception:  # noqa: BLE001 - unreadable font file
-                continue
-        return cls(embedded=embedded, faces=entries)
+        return cls(embedded=embedded, faces=[_FaceEntry(face, catalog) for face in faces])
 
     def encode(self, text: str) -> list[Glyph]:
         glyphs: list[Glyph] = []
@@ -128,36 +132,43 @@ class FontChain:
         if char == " " or char == "\t":
             return self._space_glyph(char)
         for entry in self.faces:
-            gid = entry.font.has_glyph(ord(char))
+            font = entry.font
+            gid = font.has_glyph(ord(char)) if font is not None else 0
             if gid:
                 key = f"s{entry.face.id}"
                 self.used_keys.add(key)
-                width = entry.font.glyph_advance(ord(char)) * 1000.0
+                width = font.glyph_advance(ord(char)) * 1000.0
                 return Glyph(key, gid.to_bytes(2, "big"), width, char)
         self.missing.add(char)
         return None
 
     def _space_glyph(self, char: str) -> Glyph:
         width = SPACE_FALLBACK_WIDTH
-        if self.faces:
-            width = self.faces[0].font.glyph_advance(32) * 1000.0 or SPACE_FALLBACK_WIDTH
+        primary = self._primary_font()
+        if primary is not None:
+            width = primary.glyph_advance(32) * 1000.0 or SPACE_FALLBACK_WIDTH
         if self.embedded is not None:
             # Average-ish space for the original font: use its default width hint.
             width = width if self.embedded.subtype != "Type3" else SPACE_FALLBACK_WIDTH
         return Glyph("", b"", width * (4 if char == "\t" else 1), char)
 
     def face_for_key(self, key: str) -> FontFace | None:
-        return next((e.face for e in self.faces if f"s{e.face.id}" == key), None)
+        entry = self.entry_for_key(key)
+        return entry.face if entry is not None else None
+
+    def entry_for_key(self, key: str) -> _FaceEntry | None:
+        return next((e for e in self.faces if f"s{e.face.id}" == key), None)
+
+    def _primary_font(self) -> fitz.Font | None:
+        return next((e.font for e in self.faces if e.font is not None), None)
 
     def ascender(self) -> float:
-        if self.faces:
-            return self.faces[0].font.ascender
-        return 0.8
+        font = self._primary_font()
+        return font.ascender if font is not None else 0.8
 
     def descender(self) -> float:
-        if self.faces:
-            return self.faces[0].font.descender
-        return -0.2
+        font = self._primary_font()
+        return font.descender if font is not None else -0.2
 
 
 def line_width(glyphs: list[Glyph], style: TextStyle, space_extra: float = 0.0) -> float:
@@ -183,17 +194,18 @@ def register_fonts(doc: fitz.Document, page: fitz.Page, chain: FontChain) -> dic
                 pdfobj.add_resource(doc, page, "Font", name, f"{chain.embedded.xref} 0 R")
             names[key] = name
         elif key.startswith("s"):
-            face = chain.face_for_key(key)
-            if face is not None:
-                names[key] = _register_face(doc, page, face)
+            entry = chain.entry_for_key(key)
+            if entry is not None:
+                names[key] = _register_face(doc, page, entry)
     return names
 
 
-def _register_face(doc: fitz.Document, page: fitz.Page, face: FontFace) -> str:
+def _register_face(doc: fitz.Document, page: fitz.Page, entry: _FaceEntry) -> str:
+    face = entry.face
     name = f"PSS{face.id}"
     xref = fontres.find_tagged_font(doc, face.id)
     if xref is None:
-        xref = page.insert_font(fontname=name, fontfile=face.path)
+        xref = page.insert_font(fontname=name, fontfile=entry.file)
         fontres.tag_font(doc, xref, face.id)
         _rename_inserted_font(doc, xref, face)
     elif pdfobj.resource_exists(doc, page, "Font", name) is None:

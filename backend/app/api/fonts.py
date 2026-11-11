@@ -67,8 +67,9 @@ def font_file(face_id: str) -> FileResponse:
     face = deps.catalog().get(face_id)
     if face is None:
         raise HTTPException(status_code=404, detail="Font not found.")
-    media = "font/otf" if face.path.lower().endswith(".otf") else "font/ttf"
-    return FileResponse(face.path, media_type=media, headers={"Cache-Control": "public, max-age=86400"})
+    path = deps.catalog().face_file(face)  # collection faces are served as single fonts
+    media = "font/otf" if path.lower().endswith(".otf") else "font/ttf"
+    return FileResponse(path, media_type=media, headers={"Cache-Control": "public, max-age=86400"})
 
 
 @router.post("")

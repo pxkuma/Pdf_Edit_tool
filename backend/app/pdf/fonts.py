@@ -15,13 +15,15 @@ import threading
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+import pymupdf as fitz
 from fontTools.ttLib import TTFont, TTLibError
 
+from . import fontfiles
 from .fontres import normalize_font_name
 
 log = logging.getLogger(__name__)
 
-FONT_EXTENSIONS = {".ttf", ".otf"}
+FONT_EXTENSIONS = fontfiles.FONT_EXTENSIONS
 # Width/weight variants that only clutter the picker.
 _SKIP_STYLE = re.compile(r"condensed|semicondensed|extracondensed|display|ui\b|thin|extralight", re.I)
 
@@ -37,6 +39,7 @@ class FontFace:
     mono: bool
     path: str
     source: str = "system"
+    index: int = 0  # face number inside a font collection (.ttc/.otc)
 
 
 # Common commercial fonts mapped to installed (often metric-compatible) families.
@@ -96,23 +99,35 @@ def style_from_name(name: str) -> tuple[bool, bool]:
     return bold, italic
 
 
+def _faces_from_file(path: Path) -> list[FontFace]:
+    """Every face of a font file (one, or all faces of a collection)."""
+    faces = []
+    for index, font in fontfiles.open_faces(path):
+        try:
+            faces.append(_face_from_font(font, path, index))
+        except (TTLibError, KeyError, AssertionError, ValueError, OSError, IndexError):
+            continue
+    return faces
+
+
 def _face_from_file(path: Path) -> FontFace | None:
-    try:
-        font = TTFont(str(path), lazy=True, fontNumber=0)
-        names = font["name"]
-        family = names.getDebugName(16) or names.getDebugName(1) or path.stem
-        style = names.getDebugName(17) or names.getDebugName(2) or "Regular"
-        os2 = font["OS/2"] if "OS/2" in font else None
-        post = font["post"] if "post" in font else None
-        font.close()
-    except (TTLibError, OSError, KeyError, AssertionError, ValueError):
-        return None
+    faces = _faces_from_file(path)
+    return faces[0] if faces else None
+
+
+def _face_from_font(font: TTFont, path: Path, index: int) -> FontFace:
+    names = font["name"]
+    family = names.getDebugName(16) or names.getDebugName(1) or path.stem
+    style = names.getDebugName(17) or names.getDebugName(2) or "Regular"
+    os2 = font["OS/2"] if "OS/2" in font else None
+    post = font["post"] if "post" in font else None
     bold = "bold" in style.lower() or "black" in style.lower() or (os2 is not None and os2.usWeightClass >= 600)
     italic = "italic" in style.lower() or "oblique" in style.lower()
     mono = bool(post and getattr(post, "isFixedPitch", 0))
     serif = _guess_serif(family, os2)
-    face_id = hashlib.sha1(str(path).encode()).hexdigest()[:12]
-    return FontFace(face_id, family, style, bold, italic, serif, mono, str(path))
+    key = str(path) if index == 0 else f"{path}#{index}"
+    face_id = hashlib.sha1(key.encode()).hexdigest()[:12]
+    return FontFace(face_id, family, style, bold, italic, serif, mono, str(path), index=index)
 
 
 def _guess_serif(family: str, os2: object) -> bool:
@@ -135,6 +150,7 @@ class FontCatalog:
         self._cache_file = cache_file
         self._faces: list[FontFace] | None = None
         self._lock = threading.Lock()
+        self._opened: dict[str, fitz.Font | None] = {}
         self.version = 0  # bumped whenever fonts are added
 
     def faces(self) -> list[FontFace]:
@@ -144,15 +160,34 @@ class FontCatalog:
             return self._faces
 
     def add_user_font(self, path: Path) -> FontFace | None:
-        face = _face_from_file(path)
-        if face is None:
+        """Register an uploaded font file; returns its first face (None if unreadable)."""
+        user_faces = [FontFace(**{**asdict(face), "source": "user"}) for face in _faces_from_file(path)]
+        if not user_faces:
             return None
-        user_face = FontFace(**{**asdict(face), "source": "user"})
+        ids = {face.id for face in user_faces}
         with self._lock:
             faces = self._faces if self._faces is not None else self._load()
-            self._faces = [f for f in faces if f.id != user_face.id] + [user_face]
+            self._faces = [f for f in faces if f.id not in ids] + user_faces
+            self._opened = {k: v for k, v in self._opened.items() if k not in ids}
             self.version += 1
-        return user_face
+        return user_faces[0]
+
+    def face_file(self, face: FontFace) -> str:
+        """Path of a single-face file for ``face`` (collection faces are extracted once)."""
+        cache_dir = self._cache_file.parent / "collection-faces" if self._cache_file else None
+        return fontfiles.face_file(face.path, face.index, cache_dir)
+
+    def open_font(self, face: FontFace) -> fitz.Font | None:
+        """The MuPDF font of a face, opened once per catalog (None if unreadable)."""
+        if face.id in self._opened:
+            return self._opened[face.id]
+        try:
+            font = fitz.Font(fontfile=self.face_file(face))
+        except Exception:  # noqa: BLE001 - unreadable font file
+            log.warning("Could not open font %s", face.path, exc_info=True)
+            font = None
+        self._opened[face.id] = font
+        return font
 
     def get(self, face_id: str) -> FontFace | None:
         return next((face for face in self.faces() if face.id == face_id), None)
@@ -205,9 +240,9 @@ class FontCatalog:
     def _scan(self, files: list[Path]) -> list[FontFace]:
         faces: dict[tuple[str, str], FontFace] = {}
         for path in files:
-            face = _face_from_file(path)
-            if face and not _SKIP_STYLE.search(face.style):
-                faces.setdefault((face.family, face.style), face)
+            for face in _faces_from_file(path):
+                if not _SKIP_STYLE.search(face.style):
+                    faces.setdefault((face.family, face.style), face)
         return sorted(faces.values(), key=lambda f: (f.family.lower(), f.bold, f.italic))
 
     # ----------------------------------------------------------- substitution
