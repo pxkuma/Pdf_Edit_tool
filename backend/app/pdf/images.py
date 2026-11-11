@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from typing import Callable, Mapping
 
 import pymupdf as fitz
 
@@ -45,27 +46,35 @@ def insert_image(page: fitz.Page, rect: tuple, data: bytes, keep_proportion: boo
     page.insert_image(target, stream=_normalized_image(data), keep_proportion=keep_proportion, rotate=page.rotation)
 
 
-def _usage_count(doc: fitz.Document, xref: int) -> int:
-    count = 0
+def usage_counts(doc: fitz.Document) -> dict[int, int]:
+    """How many times each image object is placed in the document (one pass over all pages)."""
+    counts: dict[int, int] = {}
     for page in doc:
-        count += sum(1 for info in page.get_image_info(xrefs=True) if info.get("xref") == xref)
-    return count
+        for info in page.get_image_info(xrefs=True):
+            xref = info.get("xref", 0)
+            if xref > 0:
+                counts[xref] = counts.get(xref, 0) + 1
+    return counts
 
 
-def list_images(doc: fitz.Document, page: fitz.Page) -> list[dict]:
+def list_images(doc: fitz.Document, page: fitz.Page, usage: Callable[[], Mapping[int, int]] | None = None) -> list[dict]:
+    """The images placed on ``page``. ``usage`` supplies (cached) document-wide counts when needed."""
+    counts: Mapping[int, int] | None = None
     items = []
     for info in page.get_image_info(xrefs=True):
         xref = info.get("xref", 0)
         bbox = fitz.Rect(info["bbox"]) & fitz.Rect(0, 0, page.cropbox.width, page.cropbox.height)
         if bbox.is_empty:
             continue
+        if xref > 0 and counts is None:
+            counts = usage() if usage else usage_counts(doc)
         items.append({
             "xref": xref,
             "bbox": to_display_rect(page, info["bbox"]),
             "width": info.get("width"),
             "height": info.get("height"),
             "editable": xref > 0,
-            "uses": _usage_count(doc, xref) if xref > 0 else 1,
+            "uses": counts.get(xref, 1) if xref > 0 and counts is not None else 1,
         })
     return items
 

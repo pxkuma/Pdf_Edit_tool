@@ -6,6 +6,7 @@ import datetime as dt
 import math
 import re
 import secrets
+from collections.abc import Iterator
 from dataclasses import dataclass
 
 import pymupdf as fitz
@@ -19,6 +20,7 @@ from .textwriter import PlacedLine, TextStyle, line_width, write_lines
 
 POSITIONS = {"top-left", "top-center", "top-right", "bottom-left", "bottom-center", "bottom-right"}
 METADATA_KEYS = ("title", "author", "subject", "keywords", "creator", "producer")
+MAX_EXPORT_PIXELS = 100_000_000  # one exported page bitmap; larger pages are exported at a lower dpi
 
 
 class ToolError(ValueError):
@@ -353,15 +355,23 @@ def export_pdf(payload: bytes, options: ExportOptions) -> bytes:
         doc.close()
 
 
-def page_images(doc: fitz.Document, pages: list[int], dpi: int, fmt: str) -> list[tuple[str, bytes]]:
+def capped_dpi(rect: fitz.Rect, dpi: int) -> int:
+    """The export resolution, lowered for very large pages so one bitmap stays below ``MAX_EXPORT_PIXELS``."""
     dpi = max(36, min(600, dpi))
+    pixels = (rect.width * dpi / 72) * (rect.height * dpi / 72)
+    if pixels > MAX_EXPORT_PIXELS:
+        dpi = int(dpi * math.sqrt(MAX_EXPORT_PIXELS / pixels))
+    return max(36, dpi)
+
+
+def iter_page_images(doc: fitz.Document, pages: list[int], dpi: int, fmt: str) -> Iterator[tuple[str, bytes]]:
+    """Render pages one at a time, so only a single bitmap is in memory."""
     fmt = "jpg" if fmt in ("jpg", "jpeg") else "png"
-    out = []
     for index in pages:
-        pix = doc[index].get_pixmap(dpi=dpi, alpha=False)
+        page = doc[index]
+        pix = page.get_pixmap(dpi=capped_dpi(page.rect, dpi), alpha=False)
         data = pix.tobytes("jpeg", jpg_quality=90) if fmt == "jpg" else pix.tobytes("png")
-        out.append((f"page-{index + 1:04d}.{fmt}", data))
-    return out
+        yield f"page-{index + 1:04d}.{fmt}", data
 
 
 def split(doc: fitz.Document, every: int) -> list[tuple[str, bytes]]:
