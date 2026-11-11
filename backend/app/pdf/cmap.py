@@ -41,8 +41,16 @@ def _dest_text(value: str, offset: int = 0) -> str:
     if len(cleaned) in (5, 6) and re.fullmatch(r"[0-9A-Fa-f]+", cleaned):
         point = int(cleaned, 16) + offset
         return chr(point) if point <= 0x10FFFF and not 0xD800 <= point <= 0xDFFF else ""
-    raw = _hex_to_bytes(cleaned)
-    return _utf16_to_str(_increment(raw, offset) if offset else raw)
+    text = _utf16_to_str(_hex_to_bytes(cleaned))
+    if not offset or not text:
+        return text
+    # Ranges advance the last character: a code point (never a UTF-16 unit, so a
+    # surrogate pair crosses <D83DDFFF> -> <D83EDC00>), and only the last one of
+    # a multi-character destination such as a ligature.
+    point = ord(text[-1]) + offset
+    if point > 0x10FFFF or 0xD800 <= point <= 0xDFFF:
+        return ""
+    return text[:-1] + chr(point)
 
 
 def _utf16_to_str(raw: bytes) -> str:
@@ -54,13 +62,6 @@ def _utf16_to_str(raw: bytes) -> str:
         return raw.decode("utf-16-be", errors="ignore")
     except UnicodeDecodeError:
         return ""
-
-
-def _increment(dst: bytes, offset: int) -> bytes:
-    """Return dst interpreted as big-endian integer plus offset (same length)."""
-    value = int.from_bytes(dst, "big") + offset
-    length = max(len(dst), 1)
-    return (value % (1 << (8 * length))).to_bytes(length, "big")
 
 
 def code_width(cmap_text: str) -> int:

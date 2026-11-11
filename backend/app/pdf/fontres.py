@@ -8,6 +8,7 @@ surrounding text, instead of an approximation.
 
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass, field
 from functools import cached_property
@@ -15,6 +16,8 @@ from functools import cached_property
 import pymupdf as fitz
 
 from . import cmap, encodings, fontcheck, fontprog, pdfobj
+
+log = logging.getLogger(__name__)
 
 SUBSET_PREFIX = re.compile(r"^[A-Z]{6}\+")
 TAG_KEY = "PDFStudioFont"
@@ -100,7 +103,18 @@ class EmbeddedFont:
 
 def analyze_font(doc: fitz.Document, xref: int, verify: bool = True) -> EmbeddedFont | None:
     """Analyse a font object. ``verify`` checks glyph presence in the font program
-    (needed before writing with the font; not needed for width calculations)."""
+    (needed before writing with the font; not needed for width calculations).
+
+    A malformed font gives None (the editor then uses a substitute), never an error.
+    """
+    try:
+        return _analyze(doc, xref, verify)
+    except Exception:  # noqa: BLE001 - hostile or broken font objects
+        log.warning("Could not analyse font %s", xref, exc_info=True)
+        return None
+
+
+def _analyze(doc: fitz.Document, xref: int, verify: bool) -> EmbeddedFont | None:
     subtype = pdfobj.read_name(doc, xref, "Subtype")
     base = pdfobj.read_name(doc, xref, "BaseFont") or f"Font{xref}"
     if subtype == "Type0":
@@ -127,6 +141,18 @@ def _invert(mapping: dict[bytes, str]) -> dict[str, bytes]:
     return reverse
 
 
+def _with_code_length(mapping: dict[bytes, str], length: int) -> dict[bytes, str]:
+    """Keys of ``length`` bytes. Broken producers write e.g. 1-byte ``<41>`` keys for
+    a 2-byte Identity-H font: those are kept by numeric value when nothing else maps it."""
+    result = {code: text for code, text in mapping.items() if len(code) == length}
+    limit = 1 << (8 * length)
+    for code, text in mapping.items():
+        value = int.from_bytes(code, "big")
+        if code and len(code) != length and value < limit:
+            result.setdefault(value.to_bytes(length, "big"), text)
+    return result
+
+
 def _analyze_type0(doc: fitz.Document, xref: int, base: str, verify: bool = True) -> EmbeddedFont | None:
     encoding = pdfobj.read_name(doc, xref, "Encoding")
     if encoding not in ("Identity-H", "Identity-V"):
@@ -141,8 +167,11 @@ def _analyze_type0(doc: fitz.Document, xref: int, base: str, verify: bool = True
         default_width = dw[0] if dw else 1000.0
         widths = parse_cid_widths(doc, descendant)
         embedded = _has_font_file(doc, descendant)
-    reverse = _invert({k: v for k, v in mapping.items() if len(k) == 2})
-    if embedded and verify:
+    reverse = _invert(_with_code_length(mapping, 2))
+    if verify and encoding == "Identity-V":
+        # Vertical text would be written with a horizontal layout: never re-use it.
+        reverse = {}
+    if embedded and verify and reverse:
         reverse = fontcheck.filter_type0(doc, xref, descendant, reverse)
     font = EmbeddedFont(
         xref=xref,
@@ -157,34 +186,52 @@ def _analyze_type0(doc: fitz.Document, xref: int, base: str, verify: bool = True
     return font
 
 
+_W_TOKEN = re.compile(r"(\d+)\s+\d+\s+R|\[|\]|[-+]?\d*\.?\d+")
+_MAX_CID = 0xFFFF
+
+
+def _w_tokens(doc: fitz.Document, text: str, depth: int = 0) -> list[str]:
+    """Tokens of a /W array with indirect elements (any generation) dereferenced."""
+    tokens: list[str] = []
+    for match in _W_TOKEN.finditer(text):
+        if match.group(1) is None:
+            tokens.append(match.group(0))
+        elif depth < 2:
+            tokens.extend(_w_tokens(doc, doc.xref_object(int(match.group(1)), compressed=True), depth + 1))
+    return tokens
+
+
 def parse_cid_widths(doc: fitz.Document, xref: int) -> dict[bytes, float]:
+    """CID -> width from a CIDFont's /W (ISO 32000-1 9.7.4.3); CIDs above 0xFFFF are ignored."""
     kind, value, _ = pdfobj.resolve(doc, xref, "W")
     if kind == "null":
         return {}
-    tokens = re.findall(r"\[|\]|-?\d*\.?\d+", re.sub(r"\d+\s+0\s+R", " ", value))
+    tokens = _w_tokens(doc, value)
+    if tokens and tokens[0] == "[":
+        tokens = tokens[1:-1] if tokens[-1] == "]" else tokens[1:]
     widths: dict[bytes, float] = {}
-    pos = 1 if tokens and tokens[0] == "[" else 0
     numbers: list[float] = []
+    pos = 0
     while pos < len(tokens):
         token = tokens[pos]
+        pos += 1
         if token == "[":
-            pos += 1
             start = int(numbers.pop()) if numbers else 0
+            numbers = []
             index = 0
             while pos < len(tokens) and tokens[pos] != "]":
-                widths[(start + index).to_bytes(2, "big")] = float(tokens[pos])
+                if tokens[pos] != "[" and 0 <= start + index <= _MAX_CID:
+                    widths[(start + index).to_bytes(2, "big")] = float(tokens[pos])
                 index += 1
                 pos += 1
-        elif token == "]":
-            pass
-        else:
+            pos += 1
+        elif token != "]":
             numbers.append(float(token))
             if len(numbers) == 3:
-                first, last, width = int(numbers[0]), int(numbers[1]), numbers[2]
-                for cid in range(first, min(last, first + 0xFFFF) + 1):
+                first, last, width = max(int(numbers[0]), 0), min(int(numbers[1]), _MAX_CID), numbers[2]
+                for cid in range(first, last + 1):
                     widths[cid.to_bytes(2, "big")] = width
                 numbers = []
-        pos += 1
     return widths
 
 
@@ -223,13 +270,22 @@ def _analyze_simple(doc: fitz.Document, xref: int, base: str, subtype: str, veri
         code_bytes=1,
         reverse=reverse,
         widths=widths,
-        default_width=_standard_default_width(base) if not widths else 0.0,
+        default_width=_missing_width(doc, xref, base, widths),
         width_scale=scale,
         embedded=embedded,
     )
     if not widths:
         _fill_standard_widths(font)
     return font
+
+
+def _missing_width(doc: fitz.Document, xref: int, base: str, widths: dict[bytes, float]) -> float:
+    """Width of codes outside FirstChar..LastChar: the descriptor's /MissingWidth."""
+    descriptor = pdfobj.ref_xref(pdfobj.get_key(doc, xref, "FontDescriptor")[1])
+    missing = pdfobj.read_number_array(doc, descriptor, "MissingWidth") if descriptor is not None else []
+    if missing:
+        return missing[0]
+    return _standard_default_width(base) if not widths else 0.0
 
 
 def _simple_reverse(doc: fitz.Document, xref: int, base: str, subtype: str, widths: dict[bytes, float],
@@ -244,7 +300,7 @@ def _simple_reverse(doc: fitz.Document, xref: int, base: str, subtype: str, widt
         mapping = cmap.glyph_table_to_map(glyph_names)
         if widths:
             mapping = {code: ch for code, ch in mapping.items() if widths.get(code, 0) > 0 or ch == " "}
-    reverse = _invert({k: v for k, v in mapping.items() if len(k) == 1})
+    reverse = _invert(_with_code_length(mapping, 1))
     if program is not None and verify:
         if glyph_names is None:
             glyph_names = _encoding_glyphs(doc, xref, base, program)
