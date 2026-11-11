@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from functools import cached_property
 
 import pymupdf as fitz
 
@@ -17,6 +18,17 @@ from . import cmap, encodings, fontcheck, fontprog, pdfobj
 
 SUBSET_PREFIX = re.compile(r"^[A-Z]{6}\+")
 TAG_KEY = "PDFStudioFont"
+
+# Latin presentation forms (U+FB00-FB06) and their decompositions. ToUnicode
+# CMaps map a ligature glyph to either one, and extracted text may hold either.
+_LIGATURE_FORMS = {"ﬀ": "ff", "ﬁ": "fi", "ﬂ": "fl", "ﬃ": "ffi",
+                   "ﬄ": "ffl", "ﬅ": "st", "ﬆ": "st"}
+LIGATURE_DECOMPOSITION = dict(_LIGATURE_FORMS)
+LIGATURE_ALTERNATIVES: dict[str, tuple[str, ...]] = {
+    **{form: (text,) for form, text in _LIGATURE_FORMS.items()},
+    **{text: tuple(f for f, t in _LIGATURE_FORMS.items() if t == text) for text in set(_LIGATURE_FORMS.values())},
+}
+MAX_LIGATURE = 3
 
 
 def clean_font_name(name: str) -> str:
@@ -43,8 +55,36 @@ class EmbeddedFont:
     def display_name(self) -> str:
         return clean_font_name(self.base_name)
 
-    def code_for(self, char: str) -> bytes | None:
-        return self.reverse.get(char)
+    def code_for(self, text: str) -> bytes | None:
+        """Code of a character or ligature ("fi" and U+FB01 are interchangeable)."""
+        code = self.reverse.get(text)
+        if code is None:
+            for alternative in LIGATURE_ALTERNATIVES.get(text, ()):
+                code = self.reverse.get(alternative)
+                if code is not None:
+                    break
+        return code
+
+    @cached_property
+    def _longest_key(self) -> int:
+        lengths = [len(key) for key in self.reverse if len(key) <= MAX_LIGATURE]
+        if any(len(form) == 1 for form in self.reverse if form in LIGATURE_ALTERNATIVES):
+            lengths.append(MAX_LIGATURE)  # a presentation form stands for its decomposition
+        return max(lengths, default=1)
+
+    def segments(self, text: str) -> list[tuple[str, bytes | None]]:
+        """Split text greedily into the longest pieces (ligatures first) with a code."""
+        result: list[tuple[str, bytes | None]] = []
+        pos = 0
+        while pos < len(text):
+            for size in range(min(self._longest_key, len(text) - pos), 0, -1):
+                piece = text[pos:pos + size]
+                code = self.code_for(piece)
+                if code is not None or size == 1:
+                    result.append((piece, code))
+                    pos += size
+                    break
+        return result
 
     def width_of(self, code: bytes) -> float:
         """Advance width of a code in 1/1000 em."""
@@ -54,7 +94,8 @@ class EmbeddedFont:
         chars = [c for c in text if not c.isspace()]
         if not chars:
             return 1.0
-        return sum(1 for c in chars if c in self.reverse) / len(chars)
+        covered = sum(len(piece) for piece, code in self.segments(text) if code is not None and not piece.isspace())
+        return min(1.0, covered / len(chars))
 
 
 def analyze_font(doc: fitz.Document, xref: int, verify: bool = True) -> EmbeddedFont | None:

@@ -113,24 +113,24 @@ class FontChain:
         return cls(embedded=embedded, faces=[_FaceEntry(face, catalog) for face in faces])
 
     def encode(self, text: str) -> list[Glyph]:
+        """Glyphs for text. The embedded font is matched greedily, ligatures first,
+        so a subset holding only the "fi" glyph keeps "fi" in the original font."""
+        pieces = self.embedded.segments(text) if self.embedded is not None else [(c, None) for c in text]
         glyphs: list[Glyph] = []
-        for char in text:
-            glyph = self._encode_char(char)
-            if glyph is not None:
-                glyphs.append(glyph)
-        return glyphs
-
-    def _encode_char(self, char: str) -> Glyph | None:
-        if char in "\r\n":
-            return None
-        if self.embedded is not None:
-            code = self.embedded.code_for(char)
+        for piece, code in pieces:
             if code is not None:
                 key = f"e{self.embedded.xref}"
                 self.used_keys.add(key)
-                return Glyph(key, code, self.embedded.width_of(code), char)
+                glyphs.append(Glyph(key, code, self.embedded.width_of(code), piece))
+            else:
+                glyphs.extend(self._encode_fallback(piece))
+        return glyphs
+
+    def _encode_fallback(self, char: str) -> list[Glyph]:
+        if char in "\r\n":
+            return []
         if char == " " or char == "\t":
-            return self._space_glyph(char)
+            return [self._space_glyph(char)]
         for entry in self.faces:
             font = entry.font
             gid = font.has_glyph(ord(char)) if font is not None else 0
@@ -138,9 +138,12 @@ class FontChain:
                 key = f"s{entry.face.id}"
                 self.used_keys.add(key)
                 width = font.glyph_advance(ord(char)) * 1000.0
-                return Glyph(key, gid.to_bytes(2, "big"), width, char)
+                return [Glyph(key, gid.to_bytes(2, "big"), width, char)]
+        decomposed = fontres.LIGATURE_DECOMPOSITION.get(char)
+        if decomposed is not None:  # no face draws U+FB01: write "f" + "i"
+            return self.encode(decomposed)
         self.missing.add(char)
-        return None
+        return []
 
     def _space_glyph(self, char: str) -> Glyph:
         width = SPACE_FALLBACK_WIDTH
