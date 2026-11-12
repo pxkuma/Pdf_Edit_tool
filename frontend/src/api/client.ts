@@ -61,7 +61,7 @@ async function send(url: string, init: RequestInit): Promise<Response> {
   }
 }
 
-async function request<T>(method: string, url: string, body?: unknown): Promise<T> {
+export async function request<T>(method: string, url: string, body?: unknown): Promise<T> {
   const init: RequestInit = { method, headers: {} };
   if (body instanceof FormData) {
     init.body = body;
