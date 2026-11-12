@@ -98,6 +98,7 @@ def info(doc_id: str) -> dict:
 @router.delete("/documents/{doc_id}")
 def close(doc_id: str) -> dict:
     deps.store().delete(doc_id)
+    deps.compare_store().delete_for_document(doc_id)  # the file it was compared with goes too
     return ok()
 
 

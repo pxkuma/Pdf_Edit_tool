@@ -22,10 +22,16 @@ class Settings:
     doc_ttl_hours: int
     trust_roots_file: str | None = None  # extra PEM roots for signature validation (e.g. AATL)
     allow_private_tsa: bool = False  # let timestamp URLs point at private/loopback addresses
+    compare_ttl_minutes: int = 60  # an uploaded comparison file is deleted this long after its last use
 
     @property
     def docs_dir(self) -> Path:
         return self.data_dir / "documents"
+
+    @property
+    def compare_dir(self) -> Path:
+        """Temporary files of document comparisons; kept apart from the documents."""
+        return self.data_dir / "compare"
 
     @property
     def user_fonts_dir(self) -> Path:
@@ -49,4 +55,5 @@ def load_settings() -> Settings:
         doc_ttl_hours=_int_env("PDF_STUDIO_DOC_TTL_HOURS", 72),
         trust_roots_file=os.environ.get("PDF_STUDIO_TRUST_ROOTS") or None,
         allow_private_tsa=os.environ.get("PDF_STUDIO_ALLOW_PRIVATE_TSA", "").lower() in ("1", "true", "yes"),
+        compare_ttl_minutes=max(1, _int_env("PDF_STUDIO_COMPARE_TTL_MINUTES", 60)),
     )
