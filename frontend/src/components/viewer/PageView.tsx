@@ -24,7 +24,7 @@ const MARKUP_TOOLS = ["highlight", "underline", "strikeout", "squiggly"] as cons
 type MarkupTool = (typeof MARKUP_TOOLS)[number];
 const DRAW_TOOLS: Tool[] = [
   "ink", "rect", "ellipse", "line", "arrow", "note", "textbox", "image", "whiteout", "redact", "eraseText",
-  "crop", "fieldText", "fieldCheckbox", "addText",
+  "crop", "fieldText", "fieldCheckbox", "addText", "signField",
 ];
 
 function renderScale(zoom: number): number {

@@ -27,6 +27,8 @@ export interface DocInfo {
   history: HistoryEntry[];
   wasEncrypted: boolean;
   hasForms: boolean;
+  /** Number of digital (certificate) signatures in the document. */
+  signatures: number;
 }
 
 export interface Span {
@@ -252,4 +254,68 @@ export interface Job<T = unknown> {
   error: string;
   result: T | null;
   document: DocInfo | null;
+}
+
+export type SignatureVerdict = "valid" | "unknown" | "modified" | "invalid";
+
+export interface SignerInfo {
+  name: string;
+  email: string;
+  organization: string;
+  issuer: string;
+  serial: string;
+  valid_from: string;
+  valid_to: string;
+  self_signed: boolean;
+}
+
+/** Validation of one digital signature (see backend sigvalidate.py). */
+export interface SignatureReport {
+  field: string;
+  page: number | null;
+  rect: Rect | null;
+  revision: number;
+  signer: SignerInfo | null;
+  signing_time: string | null;
+  timestamp: string | null;
+  timestamp_valid: boolean | null;
+  reason: string;
+  location: string;
+  certified: boolean;
+  intact: boolean;
+  valid: boolean;
+  trusted: boolean;
+  trust_note: string;
+  covers_whole_file: boolean;
+  modification: "none" | "validation_data" | "form_filling" | "annotations" | "other" | "unknown";
+  changes_allowed: boolean;
+  status: SignatureVerdict;
+  summary: string;
+  error: string | null;
+}
+
+export interface SignatureValidation {
+  version: string;
+  summary: { count: number; overall: SignatureVerdict | "none"; valid: number; unknown: number; modified: number; invalid: number };
+  signatures: SignatureReport[];
+}
+
+export interface SignRequest {
+  certificate: File;
+  password: string;
+  placement: { page: number; rect: Rect } | null;
+  reason: string;
+  location: string;
+  contact: string;
+  timestampUrl: string;
+  showDetails: boolean;
+  image: Blob | null;
+  utcOffset: number;
+}
+
+export interface SignResult {
+  field: string;
+  signer: string;
+  visible: boolean;
+  timestamped: boolean;
 }

@@ -19,7 +19,7 @@ interface DrawLayerProps {
   snapRects?: Rect[]; // text on the page, for smart guides when adding text
 }
 
-const RECT_TOOLS: Tool[] = ["rect", "ellipse", "textbox", "whiteout", "redact", "eraseText", "crop", "fieldText", "fieldCheckbox", "image"];
+const RECT_TOOLS: Tool[] = ["rect", "ellipse", "textbox", "whiteout", "redact", "eraseText", "crop", "fieldText", "fieldCheckbox", "image", "signField"];
 const LINE_TOOLS: Tool[] = ["line", "arrow"];
 
 function arrowHead(a: Point, b: Point, size: number): string {
@@ -38,7 +38,7 @@ export function DrawLayer({ docId, page, zoom, tool, pageSize, pageRef, snapRect
   const [popover, setPopover] = useState<PopoverState | null>(null);
   const [newText, setNewText] = useState<{ x: number; y: number; width: number | null } | null>(null);
   const drawing = useRef(false);
-  const { run, toast, ink, shape, redactColor, redactSanitize, placement, setPlacement, setTool } = useEditor();
+  const { run, toast, ink, shape, redactColor, redactSanitize, placement, setPlacement, setTool, setSignTarget, openDialog } = useEditor();
 
   useEffect(() => {
     setPopover(null);
@@ -160,6 +160,13 @@ export function DrawLayer({ docId, page, zoom, tool, pageSize, pageRef, snapRect
       case "crop":
         if (!isClick) setPopover({ kind: "crop", rect });
         return;
+      case "signField": {
+        const box: Rect = isClick ? [a[0], a[1], a[0] + 180, a[1] + 50] : rect;
+        setSignTarget({ page, rect: box });
+        setTool("select");
+        openDialog("digitalSign");
+        return;
+      }
       case "fieldText":
       case "fieldCheckbox": {
         const fieldRect: Rect = isClick
@@ -175,7 +182,7 @@ export function DrawLayer({ docId, page, zoom, tool, pageSize, pageRef, snapRect
   };
 
   const dragRect = start && current && (RECT_TOOLS.includes(tool) || tool === "addText") ? normRect(start, current) : null;
-  const dragClass = tool === "redact" ? " redact" : tool === "whiteout" ? " whiteout" : "";
+  const dragClass = tool === "redact" ? " redact" : tool === "whiteout" ? " whiteout" : tool === "signField" ? " sign-field" : "";
   const [pw, ph] = placementSize();
 
   return (

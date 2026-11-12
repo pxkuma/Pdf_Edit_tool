@@ -13,7 +13,7 @@ import { useEditor } from "./editor";
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function docAt(cursor: number, canUndo = cursor > 0): DocInfo {
-  return { id: "d", filename: "a.pdf", title: "", pages: [], version: `v${cursor}`, canUndo, canRedo: false, cursor, history: [], wasEncrypted: false, hasForms: false };
+  return { id: "d", filename: "a.pdf", title: "", pages: [], version: `v${cursor}`, canUndo, canRedo: false, cursor, history: [], wasEncrypted: false, hasForms: false, signatures: 0 };
 }
 
 function response(cursor: number): MutationResponse<null> {

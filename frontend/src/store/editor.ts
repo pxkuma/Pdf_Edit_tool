@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { ApiError, api } from "../api/client";
 import type { DocInfo, MutationResponse, Rect, SearchHit, Span } from "../api/types";
 import { serialized } from "../lib/serialQueue";
+import { needsSignedEditConsent, signedEditKey } from "../lib/signatures";
 
 export type Tool =
   | "select"
@@ -25,7 +26,8 @@ export type Tool =
   | "eraseText"
   | "crop"
   | "fieldText"
-  | "fieldCheckbox";
+  | "fieldCheckbox"
+  | "signField"; // draw the box of a visible digital signature
 
 export type Selection =
   | { kind: "annotation"; page: number; xref: number }
@@ -48,6 +50,7 @@ export type DialogName =
   | "protect"
   | "redactSearch"
   | "ocr"
+  | "digitalSign"
   | null;
 
 export interface NewTextStyle {
@@ -155,6 +158,17 @@ export interface Placement {
   label: string;
 }
 
+/** Where a visible digital signature goes (display space, points). */
+export interface SignTarget {
+  page: number;
+  rect: Rect;
+}
+
+export interface RunOptions {
+  /** The action may run on a signed document without asking (signing again, reverting). */
+  allowSigned?: boolean;
+}
+
 export interface Toast {
   id: number;
   kind: "info" | "success" | "error" | "warning";
@@ -187,6 +201,10 @@ interface EditorState {
   toasts: Toast[];
   scrollRequest: { page: number; y?: number; nonce: number } | null;
   textPreset: string | null;
+  signTarget: SignTarget | null;
+  signaturePanelOpen: boolean;
+  signedEditConsent: string | null; // signedEditKey() the user agreed to edit despite its signatures
+  signedEditPrompt: boolean; // the "editing invalidates signatures" question is showing
 }
 
 interface EditorActions {
@@ -217,7 +235,12 @@ interface EditorActions {
   dismissToast: (id: number) => void;
   scrollTo: (page: number, y?: number) => void;
   setTextPreset: (text: string | null) => void;
-  run: <T>(fn: () => Promise<MutationResponse<T>>, success?: string) => Promise<T | undefined>;
+  run: <T>(fn: () => Promise<MutationResponse<T>>, success?: string, options?: RunOptions) => Promise<T | undefined>;
+  setSignTarget: (target: SignTarget | null) => void;
+  setSignaturePanel: (open: boolean) => void;
+  /** Resolves true when the document may be edited: unsigned, or the user confirmed. */
+  confirmSignedEdit: () => Promise<boolean>;
+  answerSignedEdit: (allow: boolean) => void;
   track: <T>(fn: () => Promise<T>) => Promise<T | undefined>;
   moveInHistory: (target: "undo" | "redo" | number) => Promise<void>;
 }
@@ -263,6 +286,7 @@ const defaultStyles = {
 
 const savedStyles = readStorage(STYLE_KEY, defaultStyles);
 let toastId = 0;
+let signedEditWaiters: ((allow: boolean) => void)[] = [];
 
 export function errorMessage(error: unknown): string {
   if (error instanceof ApiError) return error.message;
@@ -302,6 +326,10 @@ export const useEditor = create<EditorState & EditorActions>((set, get) => {
     toasts: [],
     scrollRequest: null,
     textPreset: null,
+    signTarget: null,
+    signaturePanelOpen: false,
+    signedEditConsent: null,
+    signedEditPrompt: false,
 
     setDoc: (doc) =>
       set((state) => {
@@ -313,6 +341,8 @@ export const useEditor = create<EditorState & EditorActions>((set, get) => {
           selectedPages: state.selectedPages.filter((p) => p < count),
           currentPage: Math.min(state.currentPage, Math.max(0, count - 1)),
           activeEdit: sameDoc ? state.activeEdit : null,
+          signTarget: sameDoc ? state.signTarget : null,
+          signaturePanelOpen: sameDoc ? state.signaturePanelOpen : false,
         };
       }),
     setZoom: (zoom, fit = null) => set({ zoom: Math.min(6, Math.max(0.1, zoom)), fit }),
@@ -379,7 +409,27 @@ export const useEditor = create<EditorState & EditorActions>((set, get) => {
     scrollTo: (page, y) => set({ scrollRequest: { page, y, nonce: Date.now() } }),
     setTextPreset: (text) => set({ textPreset: text }),
 
-    run: async (fn, success) => {
+    setSignTarget: (target) => set({ signTarget: target }),
+    setSignaturePanel: (open) => set({ signaturePanelOpen: open }),
+    confirmSignedEdit: () => {
+      const { doc, signedEditConsent } = get();
+      if (!needsSignedEditConsent(doc, signedEditConsent)) return Promise.resolve(true);
+      return new Promise<boolean>((resolve) => {
+        signedEditWaiters = [...signedEditWaiters, resolve]; // several edits waiting share one question
+        set({ signedEditPrompt: true });
+      });
+    },
+    answerSignedEdit: (allow) => {
+      const waiters = signedEditWaiters;
+      signedEditWaiters = [];
+      set((state) => ({ signedEditPrompt: false, signedEditConsent: allow ? signedEditKey(state.doc) : state.signedEditConsent }));
+      waiters.forEach((resolve) => resolve(allow));
+    },
+
+    run: async (fn, success, options) => {
+      // Only await when there is a question to ask: an extra tick would let a later action (undo) overtake this one.
+      const { doc, signedEditConsent } = get();
+      if (!options?.allowSigned && needsSignedEditConsent(doc, signedEditConsent) && !(await get().confirmSignedEdit())) return undefined;
       set((state) => ({ busy: state.busy + 1 }));
       try {
         // The document is replaced inside the queue, so the next action starts from what this one produced.

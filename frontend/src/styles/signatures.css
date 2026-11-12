@@ -1,0 +1,189 @@
+/* Digital signatures: status bar, signature panel and sign dialog */
+.sig-bar {
+  grid-row: 3;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
+  --sig-tone: var(--text-2);
+}
+
+.sig-bar.success {
+  --sig-tone: var(--success);
+  background: #eef7ef;
+}
+
+.sig-bar.warning {
+  --sig-tone: var(--warning);
+  background: #fff8e6;
+}
+
+.sig-bar.error {
+  --sig-tone: var(--danger);
+  background: #fdeeee;
+}
+
+.sig-bar-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  font-size: 12.5px;
+}
+
+.sig-bar-head > svg {
+  color: var(--sig-tone);
+  flex: none;
+}
+
+.sig-bar-text {
+  flex: 1;
+  min-width: 0;
+  color: var(--text);
+}
+
+.sig-list {
+  list-style: none;
+  margin: 0;
+  padding: 0 12px 10px;
+  max-height: 40vh;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sig-item {
+  background: var(--white);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--text-3);
+  border-radius: var(--radius);
+  padding: 8px 10px;
+}
+
+.sig-item.valid {
+  border-left-color: var(--success);
+}
+
+.sig-item.unknown,
+.sig-item.modified {
+  border-left-color: var(--warning);
+}
+
+.sig-item.invalid {
+  border-left-color: var(--danger);
+}
+
+.sig-item-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.sig-item-title {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 0;
+  background: none;
+  padding: 0;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+}
+
+.sig-badge {
+  flex: none;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 10px;
+  color: #fff;
+  background: var(--text-3);
+}
+
+.sig-badge.valid {
+  background: var(--success);
+}
+
+.sig-badge.unknown,
+.sig-badge.modified {
+  background: var(--warning);
+}
+
+.sig-badge.invalid {
+  background: var(--danger);
+}
+
+.sig-muted {
+  color: var(--text-3);
+  font-size: 12px;
+}
+
+.sig-summary {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--text-2);
+}
+
+.sig-details {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 12px;
+  margin: 8px 0 0;
+  font-size: 12px;
+}
+
+.sig-details dt {
+  color: var(--text-3);
+}
+
+.sig-details dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.sig-footnote {
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.sign-col {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+.sign-file {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-2);
+  font-size: 12px;
+}
+
+.sign-images {
+  grid-template-columns: repeat(auto-fill, minmax(90px, 1fr));
+}
+
+.sign-images button {
+  height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  cursor: pointer;
+}
+
+.sign-images button.on {
+  border-color: var(--accent);
+  box-shadow: var(--focus);
+}
+
+.drag-rect.sign-field {
+  border: 1.5px dashed var(--accent);
+  background: rgb(26 95 180 / 0.1);
+}

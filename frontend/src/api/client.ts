@@ -16,6 +16,9 @@ import type {
   Point,
   Rect,
   SearchHit,
+  SignatureValidation,
+  SignRequest,
+  SignResult,
   TextStyle,
   TocItem,
 } from "./types";
@@ -85,6 +88,25 @@ async function download(method: string, url: string, body?: unknown): Promise<{ 
 }
 
 const doc = (id: string) => `/api/documents/${id}`;
+
+/** Multipart body for POST /sign. The password only travels in this request; it is never stored. */
+export function signForm(body: SignRequest): FormData {
+  const form = new FormData();
+  form.append("certificate", body.certificate, body.certificate.name || "certificate.p12");
+  form.append("password", body.password);
+  if (body.placement) {
+    form.append("page", String(body.placement.page));
+    form.append("rect", body.placement.rect.map((n) => n.toFixed(2)).join(","));
+  }
+  form.append("reason", body.reason.trim());
+  form.append("location", body.location.trim());
+  form.append("contact", body.contact.trim());
+  form.append("timestamp_url", body.timestampUrl.trim());
+  form.append("show_details", String(body.showDetails));
+  form.append("utc_offset", String(body.utcOffset));
+  if (body.image) form.append("image", body.image, "signature.png");
+  return form;
+}
 type Mut<T = unknown> = Promise<MutationResponse<T>>;
 
 export const api = {
@@ -250,6 +272,9 @@ export const api = {
   startOcr: (id: string, body: { pages: string | null; language: string; dpi: number; force: boolean }) =>
     request<Job>("POST", `${doc(id)}/ocr`, body),
   job: <T,>(jobId: string) => request<Job<T>>("GET", `/api/jobs/${jobId}`),
+
+  sign: (id: string, body: SignRequest): Mut<SignResult> => request("POST", `${doc(id)}/sign`, signForm(body)),
+  signatures: (id: string) => request<SignatureValidation>("GET", `${doc(id)}/signatures`),
 
   exportPdf: (id: string, options: Record<string, unknown>) => download("POST", `${doc(id)}/export`, options),
   exportImages: (id: string, options: Record<string, unknown>) => download("POST", `${doc(id)}/export/images`, options),

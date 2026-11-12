@@ -32,6 +32,7 @@ export function ExportDialog({ initialTab = "pdf" }: { initialTab?: Tab }) {
   const [images, setImages] = useState({ pages: "", dpi: 150, format: "png" as "png" | "jpg" });
   const [extractPages, setExtractPages] = useState(selectedPages.length ? selectedPages.map((p) => p + 1).join(",") : "");
   const [every, setEvery] = useState(1);
+  const [keepSignatures, setKeepSignatures] = useState(true);
   if (!doc) return null;
   const close = () => openDialog(null);
 
@@ -50,7 +51,7 @@ export function ExportDialog({ initialTab = "pdf" }: { initialTab?: Tab }) {
       toast("Enter a password first.", "warning");
       return;
     }
-    const options = tab === "protect" ? { ...pdf, ...security } : pdf;
+    const options = { ...(tab === "protect" ? { ...pdf, ...security } : pdf), keep_signatures: keepSignatures };
     void download(() => api.exportPdf(doc.id, options));
   };
 
@@ -103,6 +104,19 @@ export function ExportDialog({ initialTab = "pdf" }: { initialTab?: Tab }) {
           </button>
         ))}
       </div>
+      {(tab === "pdf" || tab === "protect") && doc.signatures > 0 && (
+        <div className="note warn">
+          {check(
+            "Keep the digital signatures valid",
+            keepSignatures,
+            setKeepSignatures,
+            "Download the signed file exactly as stored. Any option below rewrites the file and breaks the signatures.",
+          )}
+          {keepSignatures
+            ? "This document is digitally signed, so it is downloaded exactly as signed: the options below are not applied."
+            : "The options below rewrite the file: every digital signature in the download will be invalid."}
+        </div>
+      )}
       {(tab === "pdf" || tab === "protect") && (
         <div className="grid-2">
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>

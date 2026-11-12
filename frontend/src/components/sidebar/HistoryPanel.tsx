@@ -33,7 +33,7 @@ export function HistoryPanel() {
           </button>
         ))}
       </div>
-      <button className="btn small danger" onClick={() => run(() => api.revert(doc.id), "Reverted to the original file")}>
+      <button className="btn small danger" onClick={() => run(() => api.revert(doc.id), "Reverted to the original file", { allowSigned: true })}>
         <RotateCcw size={14} /> Revert to original
       </button>
       <p className="muted" style={{ fontSize: 11 }}>

@@ -11,6 +11,9 @@ import { Rail } from "./components/layout/Rail";
 import { Ribbon, type RibbonTab } from "./components/layout/Ribbon";
 import { TopBar } from "./components/layout/TopBar";
 import { OcrDialog } from "./components/dialogs/OcrDialog";
+import { DigitalSignDialog } from "./components/dialogs/DigitalSignDialog";
+import { SignatureBar } from "./components/signatures/SignatureBar";
+import { SignedEditPrompt } from "./components/signatures/SignedEditPrompt";
 import { PropertiesPanel } from "./components/properties/PropertiesPanel";
 import { Sidebar } from "./components/sidebar/Sidebar";
 import { StartScreen } from "./components/StartScreen";
@@ -49,6 +52,8 @@ function Dialogs() {
       return <ShortcutsDialog />;
     case "ocr":
       return <OcrDialog />;
+    case "digitalSign":
+      return <DigitalSignDialog />;
     default:
       return null;
   }
@@ -125,6 +130,7 @@ export default function App() {
     <div className="app">
       <TopBar onClose={close} />
       <Ribbon tab={tab} onTab={setTab} />
+      <SignatureBar />
       <div className="main">
         <Rail />
         <Sidebar />
@@ -132,6 +138,7 @@ export default function App() {
         <PropertiesPanel />
       </div>
       <Dialogs />
+      <SignedEditPrompt />
       <FontPrompt />
       <Toasts />
     </div>

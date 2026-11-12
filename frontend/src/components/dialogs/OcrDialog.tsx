@@ -81,6 +81,7 @@ export function OcrDialog() {
 
   const start = async () => {
     await flushEdit();
+    if (!(await useEditor.getState().confirmSignedEdit())) return;
     const pages = scope === "all" ? null : scope === "current" ? String(currentPage + 1) : range;
     try {
       const started = await api.startOcr(doc.id, { pages, language: languages.join("+"), dpi, force });

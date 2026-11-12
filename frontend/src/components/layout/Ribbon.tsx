@@ -9,7 +9,9 @@ import {
   Crop,
   Droplets,
   Eraser,
+  EyeOff,
   FileImage,
+  FileKey,
   FileInput,
   FileOutput,
   FilePlus2,
@@ -35,6 +37,7 @@ import {
   RotateCcw,
   RotateCw,
   Scissors,
+  ShieldCheck,
   Signature,
   Square,
   Stamp,
@@ -85,6 +88,9 @@ function ToolButton({ icon, label, title, active, disabled, onClick }: ToolButto
   );
 }
 
+/** Tools that never change the document (signing a signed document is not an edit either). */
+const READ_ONLY_TOOLS: Tool[] = ["select", "pan", "signField"];
+
 function Group({ children }: { children: ReactNode }) {
   return <div className="ribbon-group">{children}</div>;
 }
@@ -107,12 +113,15 @@ export function Ribbon({ tab, onTab }: { tab: RibbonTab; onTab: (tab: RibbonTab)
 function Tools({ tab }: { tab: RibbonTab }) {
   const state = useEditor();
   const { doc, tool, setTool, run, openDialog, setSidebar, sidebar, toast, selectedPages, currentPage, setPlacement, setTextPreset } = state;
+  const { signaturePanelOpen, setSignaturePanel, setSignTarget } = state;
   if (!doc) return null;
   const targets = selectedPages.length ? selectedPages : [currentPage];
   const scope = targets.length > 1 ? `${targets.length} pages` : `page ${targets[0] + 1}`;
 
   const choose = async (next: Tool) => {
     await flushEdit();
+    // Ask before an editing tool is picked on a signed document, not only when its edit is saved.
+    if (!READ_ONLY_TOOLS.includes(next) && tool !== next && !(await state.confirmSignedEdit())) return;
     if (next === "addText") setTextPreset(null);
     setTool(tool === next && next !== "select" ? "select" : next);
   };
@@ -221,6 +230,37 @@ function Tools({ tab }: { tab: RibbonTab }) {
             <ToolButton icon={<Calendar size={18} />} label="Date" onClick={() => preset(new Date().toLocaleDateString())} />
             <ToolButton icon={<Check size={18} />} label="Check" onClick={() => preset("✓")} />
             <ToolButton icon={<X size={18} />} label="Cross" onClick={() => preset("✗")} />
+          </Group>
+          <Group>
+            <ToolButton
+              icon={<FileKey size={18} />}
+              label="Certificate"
+              title="Digitally sign with a certificate (.p12/.pfx): drag a box for a visible signature"
+              active={tool === "signField"}
+              onClick={async () => {
+                await flushEdit();
+                setSignTarget(null);
+                setTool("signField");
+                toast("Drag a box where the signature should appear. To sign invisibly, click Sign invisibly.", "info");
+              }}
+            />
+            <ToolButton
+              icon={<EyeOff size={18} />}
+              label="Sign invisibly"
+              title="Digitally sign with a certificate, without a visible box"
+              onClick={() => {
+                setSignTarget(null);
+                openDialog("digitalSign");
+              }}
+            />
+            <ToolButton
+              icon={<ShieldCheck size={18} />}
+              label="Signatures"
+              title="Show the signature panel"
+              disabled={doc.signatures === 0}
+              active={signaturePanelOpen}
+              onClick={() => setSignaturePanel(!signaturePanelOpen)}
+            />
           </Group>
           <Group>
             {t("fieldText", <TextCursorInput size={18} />, "Text field")}
