@@ -266,24 +266,6 @@ class TocBody(BaseModel):
     items: list[TocItem] = Field(max_length=5000)
 
 
-class FieldValue(BaseModel):
-    page: int = Field(ge=0)
-    xref: int = Field(gt=0)
-    value: str | bool | None = None
-
-
-class FormValuesBody(BaseModel):
-    values: list[FieldValue] = Field(max_length=5000)
-
-
-class NewFieldBody(BaseModel):
-    page: int = Field(ge=0)
-    kind: Literal["text", "checkbox"]
-    rect: Rect
-    name: str = Field("", max_length=120)
-    value: str | bool | None = None
-
-
 class FlattenBody(BaseModel):
     annotations: bool = True
     forms: bool = True

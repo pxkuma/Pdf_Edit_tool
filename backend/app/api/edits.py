@@ -1,4 +1,4 @@
-"""Content editing endpoints: text, annotations, images, forms, redaction, stamps."""
+"""Content editing endpoints: text, annotations, images, flattening, redaction, stamps."""
 
 from __future__ import annotations
 
@@ -7,12 +7,12 @@ from dataclasses import asdict
 from fastapi import APIRouter, File, Form, UploadFile
 
 from .. import deps
-from ..pdf import annots, doctools, forms, images, textedit
+from ..pdf import annots, doctools, images, textedit
 from ..pdf.annots import AnnotStyle
 from ..pdf.doctools import StampStyle
 from ..pdf.push import PushItem, PushRequest
 from ..pdf.textedit import BlockEdit, NewText, SpanEdit, StyleRequest
-from ..storage import PDF_LOCK, Mutation
+from ..storage import Mutation
 from . import schemas
 from .common import amutate, check_page, mutate, ok, read_upload, single_page
 
@@ -168,38 +168,7 @@ def delete_image(doc_id: str, page: int, xref: int) -> dict:
     return mutate(doc_id, "Deleted image", run)
 
 
-# ------------------------------------------------------------------ forms
-@router.get("/forms")
-def list_forms(doc_id: str) -> dict:
-    with PDF_LOCK:
-        _state, doc = deps.store().open_current(doc_id)
-        return ok(forms.list_fields(doc))
-
-
-@router.put("/forms")
-def fill_forms(doc_id: str, body: schemas.FormValuesBody) -> dict:
-    def run(doc):
-        changed = forms.set_values(doc, [v.model_dump() for v in body.values])
-        return Mutation(changed=frozenset(changed))
-
-    return mutate(doc_id, "Filled form", run)
-
-
-@router.post("/forms")
-def add_field(doc_id: str, body: schemas.NewFieldBody) -> dict:
-    operation = single_page(body.page, lambda _doc, pg: forms.add_field(pg, body.kind, body.rect, body.name, body.value))
-    return mutate(doc_id, f"Added {body.kind} field", operation)
-
-
-@router.delete("/forms/{page}/{xref}")
-def delete_field(doc_id: str, page: int, xref: int) -> dict:
-    def run(doc):
-        forms.delete_field(doc, page, xref)
-        return Mutation(changed=frozenset({page}))
-
-    return mutate(doc_id, "Deleted form field", run)
-
-
+# ------------------------------------------------------------------ forms (see forms.py)
 @router.post("/flatten")
 def flatten(doc_id: str, body: schemas.FlattenBody) -> dict:
     def run(doc):
