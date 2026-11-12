@@ -5,6 +5,7 @@ import type { PageInfo } from "../../api/types";
 import { cssRect } from "../../lib/geometry";
 import { usePageModel } from "../../lib/pageModel";
 import { useEditor, type Tool } from "../../store/editor";
+import { CommentFocus } from "./CommentFocus";
 import { DrawLayer } from "./DrawLayer";
 import { FormLayer } from "./FormLayer";
 import { ObjectLayer } from "./ObjectLayer";
@@ -129,6 +130,7 @@ export const PageView = memo(function PageView({ docId, info, zoom, visible, too
         {pageHits.map(({ hit, index }) => (
           <div key={index} className={`search-hit${index === activeHit ? " active" : ""}`} style={cssRect(hit.rect, zoom)} />
         ))}
+        {visible && <CommentFocus page={info.index} model={model} zoom={zoom} />}
         {layers()}
       </div>
     </div>
