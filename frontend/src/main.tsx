@@ -6,6 +6,7 @@ import "./styles/controls.css";
 import "./styles/layout.css";
 import "./styles/viewer.css";
 import "./styles/signatures.css";
+import "./styles/comments.css";
 
 const root = document.getElementById("root");
 if (!root) throw new Error("Root element missing");

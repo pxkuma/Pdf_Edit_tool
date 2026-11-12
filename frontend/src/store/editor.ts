@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { ApiError, api } from "../api/client";
 import type { DocInfo, MutationResponse, Rect, SearchHit, Span } from "../api/types";
+import { MAX_AUTHOR, readCommentAuthor, writeCommentAuthor } from "../lib/commentAuthor";
 import { serialized } from "../lib/serialQueue";
 import { needsSignedEditConsent, signedEditKey } from "../lib/signatures";
 
@@ -36,7 +37,14 @@ export type Selection =
   | { kind: "field"; page: number; xref: number }
   | null;
 
-export type SidebarPanel = "thumbnails" | "outline" | "search" | "forms" | "history" | "fonts" | null;
+export type SidebarPanel = "thumbnails" | "outline" | "search" | "forms" | "history" | "fonts" | "comments" | null;
+
+/** The comment the Comments panel last pointed at; its annotation is highlighted on the page. */
+export interface ActiveComment {
+  page: number;
+  xref: number;
+  nonce: number; // changes every time, so choosing the same comment again flashes it again
+}
 
 export type DialogName =
   | "export"
@@ -205,6 +213,8 @@ interface EditorState {
   signaturePanelOpen: boolean;
   signedEditConsent: string | null; // signedEditKey() the user agreed to edit despite its signatures
   signedEditPrompt: boolean; // the "editing invalidates signatures" question is showing
+  commentAuthor: string; // signs new comments, replies and review statuses
+  activeComment: ActiveComment | null;
 }
 
 interface EditorActions {
@@ -241,6 +251,9 @@ interface EditorActions {
   /** Resolves true when the document may be edited: unsigned, or the user confirmed. */
   confirmSignedEdit: () => Promise<boolean>;
   answerSignedEdit: (allow: boolean) => void;
+  setCommentAuthor: (name: string) => void;
+  focusComment: (page: number, xref: number, y?: number) => void;
+  clearActiveComment: () => void;
   track: <T>(fn: () => Promise<T>) => Promise<T | undefined>;
   moveInHistory: (target: "undo" | "redo" | number) => Promise<void>;
 }
@@ -330,6 +343,8 @@ export const useEditor = create<EditorState & EditorActions>((set, get) => {
     signaturePanelOpen: false,
     signedEditConsent: null,
     signedEditPrompt: false,
+    commentAuthor: readCommentAuthor(),
+    activeComment: null,
 
     setDoc: (doc) =>
       set((state) => {
@@ -343,6 +358,7 @@ export const useEditor = create<EditorState & EditorActions>((set, get) => {
           activeEdit: sameDoc ? state.activeEdit : null,
           signTarget: sameDoc ? state.signTarget : null,
           signaturePanelOpen: sameDoc ? state.signaturePanelOpen : false,
+          activeComment: sameDoc ? state.activeComment : null,
         };
       }),
     setZoom: (zoom, fit = null) => set({ zoom: Math.min(6, Math.max(0.1, zoom)), fit }),
@@ -408,6 +424,16 @@ export const useEditor = create<EditorState & EditorActions>((set, get) => {
     dismissToast: (id) => set((state) => ({ toasts: state.toasts.filter((t) => t.id !== id) })),
     scrollTo: (page, y) => set({ scrollRequest: { page, y, nonce: Date.now() } }),
     setTextPreset: (text) => set({ textPreset: text }),
+    setCommentAuthor: (name) => {
+      const clean = name.slice(0, MAX_AUTHOR);
+      set({ commentAuthor: clean });
+      writeCommentAuthor(clean);
+    },
+    focusComment: (page, xref, y) => {
+      set({ activeComment: { page, xref, nonce: Date.now() } });
+      get().scrollTo(page, y);
+    },
+    clearActiveComment: () => set({ activeComment: null }),
 
     setSignTarget: (target) => set({ signTarget: target }),
     setSignaturePanel: (open) => set({ signaturePanelOpen: open }),

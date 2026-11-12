@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 Rect = tuple[float, float, float, float]
 Point = tuple[float, float]
@@ -146,6 +146,42 @@ class AnnotationBody(BaseModel):
 class AnnotationUpdateBody(BaseModel):
     style: AnnotStyleBody
     rect: Rect | None = None
+
+
+class CommentBody(BaseModel):
+    page: int = Field(ge=0)
+    kind: Literal["note", "highlight", "underline", "strikeout", "squiggly", "textbox"] = "note"
+    text: str = Field("", max_length=20000)
+    author: str = Field("", max_length=200)
+    subject: str = Field("", max_length=200)
+    color: str | None = Field(None, pattern=HEX_COLOR)
+    point: Point | None = None  # notes
+    rects: list[Rect] = Field(default_factory=list, max_length=5000)  # text markup
+    rect: Rect | None = None  # text boxes
+    font_size: float = Field(12, gt=2, le=200)
+    text_color: str = Field("#111111", pattern=HEX_COLOR)
+
+
+class CommentEditBody(BaseModel):
+    text: str | None = Field(None, max_length=20000)
+    subject: str | None = Field(None, max_length=200)
+
+
+class ReplyBody(BaseModel):
+    text: str = Field(min_length=1, max_length=20000)
+    author: str = Field("", max_length=200)
+
+
+class CommentStatusBody(BaseModel):
+    status: Literal["none", "accepted", "rejected", "cancelled", "completed"] | None = None
+    checked: bool | None = None
+    author: str = Field("", max_length=200)
+
+    @model_validator(mode="after")
+    def _one_change(self) -> "CommentStatusBody":
+        if self.checked is None and self.status is None:
+            raise ValueError("Give a status or a checkmark.")
+        return self
 
 
 class PagesBody(BaseModel):

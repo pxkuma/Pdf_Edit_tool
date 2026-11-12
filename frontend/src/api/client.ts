@@ -1,5 +1,9 @@
+import { readCommentAuthor } from "../lib/commentAuthor";
 import type {
   AnnotStyle,
+  CommentList,
+  CommentStatus,
+  XfdfImportResult,
   DocFont,
   FontLookup,
   DocInfo,
@@ -109,6 +113,13 @@ export function signForm(body: SignRequest): FormData {
 }
 type Mut<T = unknown> = Promise<MutationResponse<T>>;
 
+/** Sign a new annotation with the commenter's name unless the caller already did. */
+function signed(body: Record<string, unknown>): Record<string, unknown> {
+  const style = body.style as { author?: string } | undefined;
+  const author = readCommentAuthor();
+  return author && style && !style.author ? { ...body, style: { ...style, author } } : body;
+}
+
 export const api = {
   upload(file: File, password?: string): Promise<DocInfo> {
     const form = new FormData();
@@ -199,11 +210,32 @@ export const api = {
   ): Mut<{ replaced: number; skipped: number; pages: number[]; missing_chars?: string[] }> =>
     request("POST", `${doc(id)}/text/replace`, body),
 
-  addAnnotation: (id: string, body: Record<string, unknown>): Mut<number> => request("POST", `${doc(id)}/annotations`, body),
+  addAnnotation: (id: string, body: Record<string, unknown>): Mut<number> => request("POST", `${doc(id)}/annotations`, signed(body)),
   updateAnnotation: (id: string, page: number, xref: number, style: AnnotStyle, rect?: Rect | null): Mut =>
     request("PATCH", `${doc(id)}/annotations/${page}/${xref}`, { style, rect: rect ?? null }),
   deleteAnnotation: (id: string, page: number, xref: number): Mut =>
     request("DELETE", `${doc(id)}/annotations/${page}/${xref}`),
+
+  comments: (id: string) => request<CommentList>("GET", `${doc(id)}/comments`),
+  addComment: (id: string, body: Record<string, unknown>): Mut<{ xref: number }> => request("POST", `${doc(id)}/comments`, body),
+  editComment: (id: string, page: number, xref: number, body: { text?: string; subject?: string }): Mut =>
+    request("PATCH", `${doc(id)}/comments/${page}/${xref}`, body),
+  deleteComment: (id: string, page: number, xref: number): Mut<{ removed: number }> =>
+    request("DELETE", `${doc(id)}/comments/${page}/${xref}`),
+  replyToComment: (id: string, page: number, xref: number, text: string, author: string): Mut<{ xref: number }> =>
+    request("POST", `${doc(id)}/comments/${page}/${xref}/replies`, { text, author }),
+  setCommentStatus: (
+    id: string,
+    page: number,
+    xref: number,
+    body: { status?: CommentStatus; checked?: boolean; author: string },
+  ): Mut => request("PUT", `${doc(id)}/comments/${page}/${xref}/status`, body),
+  exportXfdf: (id: string) => download("GET", `${doc(id)}/comments/xfdf`),
+  importXfdf(id: string, file: File): Mut<XfdfImportResult> {
+    const form = new FormData();
+    form.append("file", file);
+    return request("POST", `${doc(id)}/comments/xfdf`, form);
+  },
 
   addImage(id: string, page: number, rect: Rect, file: Blob, keepProportion = true): Mut {
     const form = new FormData();

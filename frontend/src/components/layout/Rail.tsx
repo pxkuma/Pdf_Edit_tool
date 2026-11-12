@@ -1,4 +1,4 @@
-import { BookMarked, CaseSensitive, FileText, History, LayoutGrid, PanelRightOpen, Search } from "lucide-react";
+import { BookMarked, CaseSensitive, FileText, History, LayoutGrid, MessageSquare, PanelRightOpen, Search } from "lucide-react";
 import type { ReactNode } from "react";
 import { useEditor, type SidebarPanel } from "../../store/editor";
 
@@ -19,6 +19,7 @@ export function Rail() {
       {item("thumbnails", <LayoutGrid size={18} />, "Pages")}
       {item("search", <Search size={18} />, "Find & replace (Ctrl+F)")}
       {item("outline", <BookMarked size={18} />, "Bookmarks")}
+      {item("comments", <MessageSquare size={18} />, "Comments")}
       {item("forms", <FileText size={18} />, "Form fields")}
       {item("fonts", <CaseSensitive size={18} />, "Document fonts")}
       {item("history", <History size={18} />, "History")}

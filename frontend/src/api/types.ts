@@ -99,6 +99,51 @@ export interface Annotation {
   modified: string;
 }
 
+/** Review status of a comment, as Acrobat records it. */
+export type CommentStatus = "none" | "accepted" | "rejected" | "cancelled" | "completed";
+
+/** A reply (or a comment: see ``PdfComment``). Dates are UTC ISO strings, empty when the file has none. */
+export interface CommentReply {
+  id: string;
+  page: number;
+  xref: number;
+  name: string;
+  type: string; // PDF annotation type: Text, Highlight, Underline, StrikeOut, Squiggly, FreeText, Ink ...
+  author: string;
+  subject: string;
+  contents: string;
+  created: string;
+  modified: string;
+  color: string | null;
+  rect: Rect;
+  quote: string; // the text a markup comment covers
+  status: CommentStatus;
+  statusBy: string;
+  statusDate: string;
+  checked: boolean;
+  parent: number | null;
+  depth: number; // 1 = answers the comment, 2 = answers a reply ...
+}
+
+export interface PdfComment extends Omit<CommentReply, "depth"> {
+  replies: CommentReply[];
+}
+
+export interface CommentList {
+  comments: PdfComment[];
+  authors: string[];
+  count: number; // comments and replies
+}
+
+export interface XfdfImportResult {
+  added: number;
+  updated: number;
+  unchanged: number;
+  skipped: number;
+  warnings: string[];
+  pages: number[];
+}
+
 export interface PageImage {
   xref: number;
   bbox: Rect;

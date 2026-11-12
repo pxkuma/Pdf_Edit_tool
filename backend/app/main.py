@@ -12,7 +12,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import deps
-from .api import documents, edits, fonts, ocr, pages, signatures
+from .api import comments, documents, edits, fonts, ocr, pages, signatures
 from .pdf.annots import AnnotationError
 from .pdf.doctools import ToolError
 from .pdf.forms import FormError
@@ -97,6 +97,7 @@ for error_type in USER_ERRORS:
 app.include_router(documents.router)
 app.include_router(pages.router)
 app.include_router(edits.router)
+app.include_router(comments.router)
 app.include_router(fonts.router)
 app.include_router(ocr.router)
 app.include_router(signatures.router)
