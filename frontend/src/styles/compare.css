@@ -1,0 +1,456 @@
+/* Compare documents ---------------------------------------------------------- */
+.compare-app {
+  --cmp-delete: #c62828;
+  --cmp-insert: #2e7d32;
+  --cmp-replace: #b26a00;
+  --cmp-visual: #6d28d9;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: var(--white);
+}
+
+.cmp-header {
+  flex: none;
+  height: var(--topbar-h);
+}
+
+.cmp-header .doc-title {
+  flex: 0 1 auto;
+}
+
+.cmp-summary {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  padding-left: 12px;
+  border-left: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.cmp-summary span {
+  color: var(--text-3);
+  font-size: 12px;
+}
+
+.cmp-legend {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-left: 4px;
+  font-size: 11px;
+  color: var(--text-2);
+  white-space: nowrap;
+}
+
+.cmp-legend span::before {
+  content: "";
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  margin-right: 5px;
+  border-radius: 2px;
+  background: currentColor;
+  opacity: 0.55;
+  vertical-align: -1px;
+}
+
+.cmp-legend .delete {
+  color: var(--cmp-delete);
+}
+
+.cmp-legend .insert {
+  color: var(--cmp-insert);
+}
+
+.cmp-legend .replace-new {
+  color: var(--cmp-replace);
+}
+
+.cmp-legend .visual {
+  color: var(--cmp-visual);
+}
+
+.cmp-workspace {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+}
+
+/* Setup ----------------------------------------------------------------------- */
+.cmp-setup {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding: 40px 16px;
+  background: var(--canvas);
+}
+
+.cmp-card {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  width: min(560px, 100%);
+  padding: 20px;
+  background: var(--white);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.cmp-card h2 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.cmp-files {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.cmp-file {
+  flex: 1;
+  min-width: 0;
+  height: 28px;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cmp-file.empty {
+  color: var(--text-3);
+}
+
+/* Differences list -------------------------------------------------------------- */
+.cmp-sidebar {
+  width: 300px;
+}
+
+.cmp-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.cmp-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  background: var(--white);
+  color: var(--text-2);
+  font-size: 12px;
+}
+
+.cmp-chip span {
+  color: var(--text-3);
+  font-size: 11px;
+}
+
+.cmp-chip:hover:not(:disabled) {
+  background: var(--hover);
+}
+
+.cmp-chip.on {
+  border-color: var(--accent);
+  background: var(--selected);
+  color: var(--accent);
+}
+
+.cmp-chip.on span {
+  color: var(--accent);
+}
+
+.cmp-chip:disabled {
+  color: var(--text-3);
+  border-color: var(--border);
+  cursor: default;
+}
+
+.cmp-list-body {
+  padding: 0;
+}
+
+.cmp-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.cmp-item {
+  display: flex;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 12px 8px 9px;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  border-left: 3px solid transparent;
+  background: var(--white);
+  text-align: left;
+}
+
+.cmp-item:hover {
+  background: var(--hover);
+}
+
+.cmp-item.active {
+  background: var(--selected);
+  border-left-color: var(--accent);
+}
+
+.cmp-item-icon {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  margin-top: 1px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.cmp-item-icon svg {
+  color: #fff;
+}
+
+.cmp-item.insert .cmp-item-icon {
+  color: var(--cmp-insert);
+}
+
+.cmp-item.delete .cmp-item-icon {
+  color: var(--cmp-delete);
+}
+
+.cmp-item.replace .cmp-item-icon {
+  color: var(--cmp-replace);
+}
+
+.cmp-item.visual .cmp-item-icon {
+  color: var(--cmp-visual);
+}
+
+.cmp-item-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.cmp-item-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.cmp-item-head strong {
+  font-weight: 600;
+}
+
+.cmp-item-head span {
+  color: var(--text-3);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.cmp-item-detail {
+  color: var(--text-2);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* Page rows -------------------------------------------------------------------- */
+.cmp-pages {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  overflow: auto;
+  background: var(--canvas);
+  outline: none;
+}
+
+.cmp-canvas {
+  min-width: 100%;
+  padding-bottom: 80px;
+}
+
+.cmp-row {
+  display: flex;
+  gap: 20px;
+}
+
+.cmp-col {
+  display: flex;
+  flex-direction: column;
+  flex: none;
+  min-width: 0;
+}
+
+.cmp-caption {
+  flex: none;
+  height: 26px;
+  padding-top: 6px;
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.cmp-row.inserted .cmp-col:last-child .cmp-caption {
+  color: var(--cmp-insert);
+}
+
+.cmp-row.removed .cmp-col:first-child .cmp-caption {
+  color: var(--cmp-delete);
+}
+
+.cmp-page,
+.cmp-slot {
+  position: relative;
+  flex: none;
+  margin: 0 auto;
+}
+
+.cmp-page {
+  background: #fff;
+  outline: 1px solid #d4d4d4;
+  overflow: hidden;
+  user-select: none;
+}
+
+.cmp-render {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.cmp-loading {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 12px;
+  color: #a0a0a0;
+  font-size: 12px;
+  text-align: center;
+}
+
+.cmp-slot {
+  display: grid;
+  place-items: center;
+  border: 1px dashed var(--border-strong);
+  color: var(--text-3);
+  font-size: 12px;
+  text-align: center;
+  padding: 12px;
+}
+
+/* Marks on the pages */
+.cmp-hl {
+  position: absolute;
+  pointer-events: none;
+  border-radius: 2px;
+}
+
+.cmp-hl.delete {
+  background: rgb(198 40 40 / 0.22);
+  box-shadow: inset 0 -2px 0 var(--cmp-delete);
+}
+
+.cmp-hl.insert {
+  background: rgb(46 125 50 / 0.22);
+  box-shadow: inset 0 -2px 0 var(--cmp-insert);
+}
+
+.cmp-hl.replace-old,
+.cmp-hl.replace-new {
+  background: rgb(178 106 0 / 0.22);
+  box-shadow: inset 0 -2px 0 var(--cmp-replace);
+}
+
+.cmp-hl.visual {
+  background: rgb(109 40 217 / 0.12);
+  outline: 2px dashed var(--cmp-visual);
+  outline-offset: -1px;
+}
+
+.cmp-hl.page-insert {
+  background: rgb(46 125 50 / 0.07);
+  outline: 4px solid rgb(46 125 50 / 0.55);
+  outline-offset: -4px;
+}
+
+.cmp-hl.page-delete {
+  background: rgb(198 40 40 / 0.07);
+  outline: 4px solid rgb(198 40 40 / 0.55);
+  outline-offset: -4px;
+}
+
+.cmp-hl.marker {
+  box-shadow: none;
+  border-radius: 1px;
+}
+
+.cmp-hl.marker.delete {
+  background: var(--cmp-delete);
+}
+
+.cmp-hl.marker.insert {
+  background: var(--cmp-insert);
+}
+
+.cmp-hl.active {
+  z-index: 2;
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  box-shadow: 0 0 0 4px rgb(26 95 180 / 0.25);
+}
+
+.cmp-hl.page-insert.active,
+.cmp-hl.page-delete.active {
+  outline-offset: -4px;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .cmp-hl.active {
+    animation: cmp-pulse 0.9s ease-out 2;
+  }
+}
+
+@keyframes cmp-pulse {
+  from {
+    box-shadow: 0 0 0 10px rgb(26 95 180 / 0.35);
+  }
+  to {
+    box-shadow: 0 0 0 4px rgb(26 95 180 / 0.25);
+  }
+}
+
+@media (max-width: 1100px) {
+  .cmp-legend {
+    display: none;
+  }
+
+  .cmp-sidebar {
+    width: 240px;
+  }
+}

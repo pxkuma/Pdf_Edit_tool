@@ -17,6 +17,7 @@ import {
   FilePlus2,
   FileSearch,
   FileText,
+  GitCompare,
   Hand,
   Highlighter,
   History,
@@ -57,6 +58,7 @@ import type { ReactNode } from "react";
 import { api } from "../../api/client";
 import { flushEdit } from "../../lib/editSession";
 import { imageSize, pickFile } from "../../lib/files";
+import { useCompare } from "../../store/compare";
 import { errorMessage, useEditor, type Tool } from "../../store/editor";
 
 export type RibbonTab = "edit" | "annotate" | "sign" | "pages" | "protect" | "tools";
@@ -178,6 +180,12 @@ function Tools({ tab }: { tab: RibbonTab }) {
           </Group>
           <Group>
             <ToolButton icon={<ScanText size={18} />} label="OCR" title="Recognise text in scanned pages" onClick={() => openDialog("ocr")} />
+            <ToolButton
+              icon={<GitCompare size={18} />}
+              label="Compare"
+              title="Compare this document with another file"
+              onClick={() => void flushEdit().then(() => useCompare.getState().open())}
+            />
           </Group>
           <Group>
             {panel("search", <Replace size={18} />, "Find/Replace")}
