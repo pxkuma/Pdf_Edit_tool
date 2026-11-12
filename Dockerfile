@@ -21,8 +21,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 # Liberation, Calibri -> Carlito, Cambria -> Caladea) plus wide Unicode coverage
 # (fonts-noto-cjk: Chinese, Japanese and Korean, shipped as .ttc collections).
 # OCR: Tesseract with a set of common languages (add more tesseract-ocr-<lang> here).
+# ca-certificates: root store used to judge trust when validating digital signatures.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
+      ca-certificates \
       fonts-liberation2 fonts-crosextra-carlito fonts-crosextra-caladea \
       fonts-dejavu-core fonts-noto-core fonts-noto-cjk fonts-open-sans fonts-lato fonts-roboto-unhinted \
       tesseract-ocr tesseract-ocr-eng tesseract-ocr-hin tesseract-ocr-deu tesseract-ocr-fra \
