@@ -32,7 +32,7 @@ from pyhanko.stamp import StaticStampStyle
 from .geometry import Rect4, from_display_rect
 from .sigappearance import AppearanceError, AppearanceSpec, build_appearance
 from .sigcert import SigningIdentity
-from .sigfields import unique_field_name
+from .sigfields import signature_fields, unique_field_name
 
 MIN_BOX = (24.0, 12.0)  # smallest visible signature, in points
 MAX_TEXT = 200
@@ -62,6 +62,7 @@ class SignOptions:
     image: bytes | None = None  # drawn/typed/uploaded signature image shown in the box
     utc_offset_minutes: int = 0  # the signer's time zone, for the date printed in the box
     fontfile: str | None = None  # Unicode font for the printed details
+    field: str | None = None  # sign into this existing empty signature field (placement is then ignored)
 
 
 @dataclass(frozen=True)
@@ -90,14 +91,14 @@ def appearance_lines(identity: SigningIdentity, options: SignOptions, when: dt.d
     return tuple(lines)
 
 
-def _pdf_box(page: fitz.Page, display_rect: Rect4) -> tuple[tuple[float, float, float, float], float, float]:
+def _pdf_box(page: fitz.Page, display_rect: Rect4, minimum: tuple[float, float] = MIN_BOX) -> tuple[tuple[float, float, float, float], float, float]:
     """Field box in PDF user space plus its on-screen width and height. Restores the page rotation."""
     unrotated = from_display_rect(page, display_rect)
     rotation = page.rotation
     page.set_rotation(0)  # transformation_matrix is only exact for unrotated pages
     try:
         unrotated &= page.rect
-        if unrotated.is_empty or unrotated.width < MIN_BOX[1] or unrotated.height < MIN_BOX[1]:
+        if unrotated.is_empty or unrotated.width < minimum[1] or unrotated.height < minimum[1]:
             raise SignatureError("The signature box is too small or outside the page. Draw a larger box.")
         pdf = unrotated * ~page.transformation_matrix
         pdf.normalize()
@@ -105,21 +106,41 @@ def _pdf_box(page: fitz.Page, display_rect: Rect4) -> tuple[tuple[float, float, 
         page.set_rotation(rotation)
     turned = rotation in (90, 270)
     width, height = (unrotated.height, unrotated.width) if turned else (unrotated.width, unrotated.height)
-    if max(width, height) < MIN_BOX[0]:
+    if max(width, height) < minimum[0]:
         raise SignatureError("The signature box is too small. Draw a larger box.")
     return (round(pdf.x0, 3), round(pdf.y0, 3), round(pdf.x1, 3), round(pdf.y1, 3)), width, height
 
 
 def prepare(doc: fitz.Document, identity: SigningIdentity, options: SignOptions, when: dt.datetime) -> FieldPlan:
     """Plan the new signature field. ``doc`` is a scratch copy: its pages may be touched temporarily."""
+    if options.field:
+        return _existing_field_plan(doc, identity, options, when)
     name = unique_field_name(doc)
     if options.placement is None:
         return FieldPlan(name=name, page=0, box=None, appearance=None)
     index = options.placement.page
     if not 0 <= index < doc.page_count:
         raise SignatureError("Page number out of range.")
+    return _visible_plan(doc, name, index, _pdf_box(doc[index], options.placement.rect), identity, options, when)
+
+
+def _existing_field_plan(doc: fitz.Document, identity: SigningIdentity, options: SignOptions, when: dt.datetime) -> FieldPlan:
+    """Plan a signature into an empty signature field prepared earlier (e.g. with Prepare form)."""
+    field = next((f for f in signature_fields(doc) if f.name == options.field), None)
+    if field is None:
+        raise SignatureError(f"There is no signature field named “{options.field}”.")
+    if field.signed:
+        raise SignatureError(f"The signature field “{options.field}” is already signed.")
+    if field.rect is None:
+        return FieldPlan(name=field.name, page=field.page, box=None, appearance=None)
+    measured = _pdf_box(doc[field.page], field.rect, minimum=(1.0, 1.0))
+    return _visible_plan(doc, field.name, field.page, measured, identity, options, when)
+
+
+def _visible_plan(doc: fitz.Document, name: str, index: int, measured: tuple, identity: SigningIdentity,
+                  options: SignOptions, when: dt.datetime) -> FieldPlan:
     page = doc[index]
-    box, width, height = _pdf_box(page, options.placement.rect)
+    box, width, height = measured
     lines = appearance_lines(identity, options, when)
     if not lines and not options.image:
         raise SignatureError("A visible signature needs its details or a signature image.")

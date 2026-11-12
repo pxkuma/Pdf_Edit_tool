@@ -119,6 +119,7 @@ async def sign(
     show_details: bool = Form(True),
     utc_offset: int = Form(0, ge=-840, le=840),
     image: UploadFile | None = File(None),
+    field: str = Form("", max_length=200),
 ) -> dict:
     deps.store().get(doc_id)  # 404 before reading uploads for a missing document
     try:
@@ -129,7 +130,8 @@ async def sign(
         if image is not None:
             await image.close()
     options = SignOptions(
-        placement=_placement(page, rect),
+        placement=None if field.strip() else _placement(page, rect),
+        field=field.strip() or None,
         reason=reason, location=location, contact=contact,
         show_details=show_details, image=image_data, utc_offset_minutes=utc_offset,
         fontfile=_fontfile(),
