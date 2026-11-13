@@ -9,7 +9,13 @@ import type {
   DocInfo,
   EditReport,
   FontFamily,
+  CreatedField,
+  FieldPatch,
+  FieldProposal,
+  FieldValue,
   FormField,
+  NewFieldRequest,
+  TabOrder,
   Job,
   Metadata,
   OcrCapabilities,
@@ -98,7 +104,9 @@ export function signForm(body: SignRequest): FormData {
   const form = new FormData();
   form.append("certificate", body.certificate, body.certificate.name || "certificate.p12");
   form.append("password", body.password);
-  if (body.placement) {
+  if (body.field) {
+    form.append("field", body.field);
+  } else if (body.placement) {
     form.append("page", String(body.placement.page));
     form.append("rect", body.placement.rect.map((n) => n.toFixed(2)).join(","));
   }
@@ -292,11 +300,19 @@ export const api = {
   setToc: (id: string, items: TocItem[]): Mut => request("PUT", `${doc(id)}/toc`, { items }),
 
   forms: (id: string) => request<FormField[]>("GET", `${doc(id)}/forms`),
-  fillForms: (id: string, values: { page: number; xref: number; value: string | boolean }[]): Mut =>
+  fillForms: (id: string, values: { page: number; xref: number; value: FieldValue }[]): Mut =>
     request("PUT", `${doc(id)}/forms`, { values }),
-  addField: (id: string, body: { page: number; kind: string; rect: Rect; name: string }): Mut =>
-    request("POST", `${doc(id)}/forms`, body),
+  /** The result is the new field's xref. */
+  addField: (id: string, body: NewFieldRequest): Mut<number> => request("POST", `${doc(id)}/forms`, body),
+  addFields: (id: string, fields: NewFieldRequest[]): Mut<CreatedField[]> =>
+    request("POST", `${doc(id)}/forms/batch`, { fields, uniquify: true }),
+  updateField: (id: string, page: number, xref: number, patch: FieldPatch): Mut =>
+    request("PATCH", `${doc(id)}/forms/${page}/${xref}`, patch),
   deleteField: (id: string, page: number, xref: number): Mut => request("DELETE", `${doc(id)}/forms/${page}/${xref}`),
+  tabOrder: (id: string, page: number) => request<TabOrder>("GET", `${doc(id)}/forms/tab-order/${page}`),
+  setTabOrder: (id: string, page: number, mode: "manual" | "row" | "column", order?: number[]): Mut =>
+    request("PUT", `${doc(id)}/forms/tab-order`, { page, mode, order: order ?? null }),
+  detectFields: (id: string, pages: number[]) => request<FieldProposal[]>("POST", `${doc(id)}/forms/detect`, { pages }),
   flatten: (id: string, annotations: boolean, forms: boolean): Mut =>
     request("POST", `${doc(id)}/flatten`, { annotations, forms }),
 

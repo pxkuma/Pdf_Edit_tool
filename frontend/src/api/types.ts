@@ -153,13 +153,30 @@ export interface PageImage {
   uses: number;
 }
 
+export type FormFieldKind = "text" | "checkbox" | "radio" | "combobox" | "listbox" | "signature" | "button" | "unknown";
+export type FieldValue = string | boolean | string[];
+export type FieldAlign = "left" | "center" | "right";
+export type FieldBorderStyle = "solid" | "dashed" | "beveled" | "inset" | "underline";
+export type ButtonAction = "none" | "reset" | "print" | "url" | "submit" | "other";
+
+export interface FieldChoice {
+  value: string; // export value
+  label: string; // what the list shows
+}
+
+export interface FieldFormat {
+  kind: "none" | "number" | "date";
+  decimals: number;
+  pattern: string;
+}
+
 export interface FormField {
   xref: number;
   page: number;
   name: string;
   label: string;
-  type: "text" | "checkbox" | "radio" | "combobox" | "listbox" | "signature" | "button" | "unknown";
-  value: string | boolean;
+  type: FormFieldKind;
+  value: FieldValue;
   options: string[];
   onState: string | null;
   rect: Rect;
@@ -167,6 +184,91 @@ export interface FormField {
   required: boolean;
   multiline: boolean;
   maxLength: number;
+  tabIndex: number;
+  tooltip: string;
+  defaultValue: string | string[];
+  font: string;
+  fontSize: number; // 0 = auto
+  textColor: string;
+  fillColor: string | null;
+  borderColor: string | null;
+  borderWidth: number;
+  borderStyle: FieldBorderStyle;
+  align: FieldAlign;
+  comb: boolean;
+  format: FieldFormat;
+  choices: FieldChoice[];
+  editable: boolean;
+  multiSelect: boolean;
+  caption: string;
+  action: ButtonAction;
+  url: string;
+  group: number; // radio: number of buttons in the group
+  signed: boolean;
+}
+
+/** A partial property edit (snake_case, as the server expects). Fields left out keep their value. */
+export interface FieldPatch {
+  name?: string;
+  tooltip?: string;
+  required?: boolean;
+  read_only?: boolean;
+  default_value?: string | boolean | string[];
+  font?: "Helvetica" | "Times" | "Courier";
+  font_size?: number;
+  text_color?: string;
+  fill_color?: string; // "#rrggbb" or "none"
+  border_color?: string; // "#rrggbb" or "none"
+  border_width?: number;
+  border_style?: FieldBorderStyle;
+  align?: FieldAlign;
+  multiline?: boolean;
+  max_length?: number;
+  comb?: boolean;
+  format?: FieldFormat;
+  options?: FieldChoice[];
+  editable?: boolean;
+  multi_select?: boolean;
+  export_value?: string;
+  caption?: string;
+  action?: Exclude<ButtonAction, "other">;
+  url?: string;
+  rect?: Rect;
+}
+
+export interface NewFieldRequest {
+  page: number;
+  kind: Exclude<FormFieldKind, "unknown">;
+  rect: Rect;
+  name?: string;
+  props?: FieldPatch;
+}
+
+export interface CreatedField {
+  xref: number;
+  page: number;
+  name: string;
+  kind: string;
+}
+
+export interface TabOrder {
+  page: number;
+  mode: "manual" | "row" | "column" | "structure";
+  fields: { xref: number; name: string; rect: Rect }[];
+}
+
+/** A field the server recognised on the page; nothing is added until the user accepts it. */
+export interface FieldProposal {
+  id: string;
+  page: number;
+  kind: Exclude<FormFieldKind, "unknown">;
+  rect: Rect;
+  name: string;
+  label: string;
+  confidence: number;
+  reason: string;
+  multiline: boolean;
+  format: { kind: "date"; pattern: string } | null;
 }
 
 export interface PageModel {
@@ -349,6 +451,7 @@ export interface SignRequest {
   certificate: File;
   password: string;
   placement: { page: number; rect: Rect } | null;
+  field?: string | null; // sign into this existing empty signature field instead of placing a new one
   reason: string;
   location: string;
   contact: string;

@@ -7,8 +7,10 @@ import { usePageModel } from "../../lib/pageModel";
 import { useEditor, type Tool } from "../../store/editor";
 import { CommentFocus } from "./CommentFocus";
 import { DrawLayer } from "./DrawLayer";
+import { FieldEditLayer } from "./FieldEditLayer";
 import { FormLayer } from "./FormLayer";
 import { ObjectLayer } from "./ObjectLayer";
+import { ProposalLayer } from "./ProposalLayer";
 import { TextEditLayer } from "./TextEditLayer";
 import { WordSelectLayer } from "./WordSelectLayer";
 
@@ -25,7 +27,8 @@ const MARKUP_TOOLS = ["highlight", "underline", "strikeout", "squiggly"] as cons
 type MarkupTool = (typeof MARKUP_TOOLS)[number];
 const DRAW_TOOLS: Tool[] = [
   "ink", "rect", "ellipse", "line", "arrow", "note", "textbox", "image", "whiteout", "redact", "eraseText",
-  "crop", "fieldText", "fieldCheckbox", "addText", "signField",
+  "crop", "fieldText", "fieldCheckbox", "fieldRadio", "fieldCombobox", "fieldListbox", "fieldButton", "fieldSignature",
+  "addText", "signField",
 ];
 
 function renderScale(zoom: number): number {
@@ -87,11 +90,20 @@ export const PageView = memo(function PageView({ docId, info, zoom, visible, too
         <DrawLayer docId={docId} page={info.index} zoom={zoom} tool={tool} pageSize={[info.width, info.height]} pageRef={ref} snapRects={snapRects} />
       );
     }
+    if (tool === "editFields") {
+      return (
+        <>
+          <FieldEditLayer docId={docId} model={model} zoom={zoom} />
+          <ProposalLayer page={info.index} zoom={zoom} />
+        </>
+      );
+    }
     if (tool === "select") {
       return (
         <>
           {objectLayers}
           <FormLayer docId={docId} model={model} zoom={zoom} />
+          <ProposalLayer page={info.index} zoom={zoom} />
         </>
       );
     }
@@ -111,7 +123,7 @@ export const PageView = memo(function PageView({ docId, info, zoom, visible, too
         onPointerDownCapture={() => {
           if (!current) setCurrentPage(info.index);
         }}
-        onPointerDown={() => tool === "select" && select(null)}
+        onPointerDown={() => (tool === "select" || tool === "editFields") && select(null)}
       >
         {visible && shown ? (
           <img

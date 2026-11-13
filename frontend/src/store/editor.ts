@@ -1,7 +1,8 @@
 import { create } from "zustand";
 import { ApiError, api } from "../api/client";
-import type { DocInfo, MutationResponse, Rect, SearchHit, Span } from "../api/types";
+import type { DocInfo, FieldProposal, MutationResponse, Rect, SearchHit, Span } from "../api/types";
 import { MAX_AUTHOR, readCommentAuthor, writeCommentAuthor } from "../lib/commentAuthor";
+import { toggled } from "../lib/formFields";
 import { serialized } from "../lib/serialQueue";
 import { needsSignedEditConsent, signedEditKey } from "../lib/signatures";
 
@@ -28,6 +29,12 @@ export type Tool =
   | "crop"
   | "fieldText"
   | "fieldCheckbox"
+  | "fieldRadio"
+  | "fieldCombobox"
+  | "fieldListbox"
+  | "fieldButton"
+  | "fieldSignature" // an empty signature field to sign later
+  | "editFields" // select, move, resize and configure the form's fields
   | "signField"; // draw the box of a visible digital signature
 
 export type Selection =
@@ -38,6 +45,12 @@ export type Selection =
   | null;
 
 export type SidebarPanel = "thumbnails" | "outline" | "search" | "forms" | "history" | "fonts" | "comments" | null;
+
+/** Fields recognised on the pages, waiting for the user to accept or reject them. */
+export interface DetectedFields {
+  proposals: FieldProposal[];
+  rejected: ReadonlySet<string>; // ids the user turned off
+}
 
 /** The comment the Comments panel last pointed at; its annotation is highlighted on the page. */
 export interface ActiveComment {
@@ -215,6 +228,8 @@ interface EditorState {
   signedEditPrompt: boolean; // the "editing invalidates signatures" question is showing
   commentAuthor: string; // signs new comments, replies and review statuses
   activeComment: ActiveComment | null;
+  detected: DetectedFields | null;
+  radioGroup: string | null; // new radio buttons join this group (set by "Add button to group")
 }
 
 interface EditorActions {
@@ -254,6 +269,9 @@ interface EditorActions {
   setCommentAuthor: (name: string) => void;
   focusComment: (page: number, xref: number, y?: number) => void;
   clearActiveComment: () => void;
+  setDetected: (proposals: FieldProposal[] | null) => void;
+  toggleProposal: (id: string) => void;
+  setRadioGroup: (name: string | null) => void;
   track: <T>(fn: () => Promise<T>) => Promise<T | undefined>;
   moveInHistory: (target: "undo" | "redo" | number) => Promise<void>;
 }
@@ -345,6 +363,8 @@ export const useEditor = create<EditorState & EditorActions>((set, get) => {
     signedEditPrompt: false,
     commentAuthor: readCommentAuthor(),
     activeComment: null,
+    detected: null,
+    radioGroup: null,
 
     setDoc: (doc) =>
       set((state) => {
@@ -359,6 +379,9 @@ export const useEditor = create<EditorState & EditorActions>((set, get) => {
           signTarget: sameDoc ? state.signTarget : null,
           signaturePanelOpen: sameDoc ? state.signaturePanelOpen : false,
           activeComment: sameDoc ? state.activeComment : null,
+          // Proposals describe one version of the pages: any change (or another document) discards them.
+          detected: sameDoc && state.doc?.version === doc?.version ? state.detected : null,
+          radioGroup: sameDoc ? state.radioGroup : null,
         };
       }),
     setZoom: (zoom, fit = null) => set({ zoom: Math.min(6, Math.max(0.1, zoom)), fit }),
@@ -434,6 +457,10 @@ export const useEditor = create<EditorState & EditorActions>((set, get) => {
       get().scrollTo(page, y);
     },
     clearActiveComment: () => set({ activeComment: null }),
+    setDetected: (proposals) => set({ detected: proposals ? { proposals, rejected: new Set<string>() } : null }),
+    toggleProposal: (id) =>
+      set((state) => (state.detected ? { detected: { ...state.detected, rejected: toggled(state.detected.rejected, id) } } : {})),
+    setRadioGroup: (name) => set({ radioGroup: name }),
 
     setSignTarget: (target) => set({ signTarget: target }),
     setSignaturePanel: (open) => set({ signaturePanelOpen: open }),
