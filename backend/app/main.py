@@ -12,7 +12,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import deps
-from .api import comments, documents, edits, fonts, forms, ocr, pages, signatures
+from .api import comments, compare, documents, edits, fonts, forms, ocr, pages, signatures
 from .pdf.annots import AnnotationError
 from .pdf.doctools import ToolError
 from .pdf.forms import FormError
@@ -38,6 +38,9 @@ async def _cleanup_loop() -> None:
             removed = await asyncio.to_thread(deps.store().cleanup_expired, cfg.doc_ttl_hours)
             if removed:
                 log.info("Removed %d expired document(s)", removed)
+            stale = await asyncio.to_thread(deps.compare_store().cleanup)
+            if stale:
+                log.info("Removed %d expired comparison file(s)", stale)
         except Exception:  # noqa: BLE001 - never let the janitor die
             log.exception("Cleanup failed")
         await asyncio.sleep(3600)
@@ -102,6 +105,7 @@ app.include_router(forms.router)
 app.include_router(fonts.router)
 app.include_router(ocr.router)
 app.include_router(signatures.router)
+app.include_router(compare.router)
 
 
 @app.get("/api/health")

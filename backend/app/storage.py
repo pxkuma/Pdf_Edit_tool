@@ -144,6 +144,11 @@ def _load_any(data: bytes, password: str | None) -> tuple[fitz.Document, bool]:
     return doc, encrypted
 
 
+def load_upload(data: bytes, password: str | None = None) -> tuple[fitz.Document, bool]:
+    """Open an uploaded PDF, image or other supported file as a PDF (and decrypt it)."""
+    return _load_any(data, password)
+
+
 def serialize(doc: fitz.Document) -> bytes:
     return doc.tobytes(garbage=1, deflate=True, encryption=fitz.PDF_ENCRYPT_NONE)
 

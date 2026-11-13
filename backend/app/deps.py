@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from functools import lru_cache
 
+from .compare_store import CompareStore
 from .config import Settings, load_settings
 from .pdf.fonts import FontCatalog, FontFace
-from .storage import DocumentStore
+from .storage import DocumentNotFound, DocumentStore
 
 
 @lru_cache(maxsize=1)
@@ -18,6 +19,20 @@ def settings() -> Settings:
 def store() -> DocumentStore:
     cfg = settings()
     return DocumentStore(cfg.docs_dir, cfg.max_history)
+
+
+@lru_cache(maxsize=1)
+def compare_store() -> CompareStore:
+    cfg = settings()
+
+    def document_exists(doc_id: str) -> bool:
+        try:
+            store().get(doc_id)
+        except DocumentNotFound:
+            return False
+        return True
+
+    return CompareStore(cfg.compare_dir, cfg.compare_ttl_minutes * 60, document_exists)
 
 
 @lru_cache(maxsize=1)

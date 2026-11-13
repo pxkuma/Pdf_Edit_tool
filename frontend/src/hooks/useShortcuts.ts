@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { api } from "../api/client";
 import { redo, undo, quickDownload } from "../components/layout/TopBar";
 import { flushEdit } from "../lib/editSession";
+import { useCompare } from "../store/compare";
 import { useEditor, type Tool } from "../store/editor";
 
 const TOOL_KEYS: Record<string, Tool> = { v: "select", t: "editText", a: "addText", h: "highlight", d: "ink", n: "note" };
@@ -32,6 +33,7 @@ export function useShortcuts(): void {
     const onKeyDown = (event: KeyboardEvent) => {
       const state = useEditor.getState();
       if (!state.doc || state.dialog) return;
+      if (useCompare.getState().phase !== "closed") return; // comparing is read-only: no editing shortcuts
       const mod = event.ctrlKey || event.metaKey;
       const key = event.key.toLowerCase();
 
