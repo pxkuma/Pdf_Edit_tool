@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import ssl
+import sys
 from functools import lru_cache
 from pathlib import Path
 
@@ -44,6 +45,24 @@ def _read_bundle(path: Path) -> list[x509.Certificate]:
     return certs
 
 
+def _windows_roots() -> list[x509.Certificate]:
+    """Trusted root certificates from the Windows certificate store (there is no CA bundle file there)."""
+    if sys.platform != "win32":
+        return []
+    certs: list[x509.Certificate] = []
+    try:
+        for der, encoding, _trust in ssl.enum_certificates("ROOT"):
+            if encoding != "x509_asn":
+                continue
+            try:
+                certs.append(x509.Certificate.load(der))
+            except ValueError:
+                continue
+    except OSError:
+        log.warning("The Windows certificate store could not be read", exc_info=True)
+    return certs
+
+
 def _system_bundle() -> Path | None:
     candidates = [ssl.get_default_verify_paths().cafile, *SYSTEM_BUNDLES]
     try:
@@ -60,7 +79,7 @@ def _system_bundle() -> Path | None:
 
 @lru_cache(maxsize=4)
 def trust_roots(extra_bundle: str | None = None) -> tuple[x509.Certificate, ...]:
-    roots: list[x509.Certificate] = []
+    roots: list[x509.Certificate] = _windows_roots()
     bundle = _system_bundle()
     if bundle:
         roots.extend(_read_bundle(bundle))
