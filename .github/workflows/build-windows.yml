@@ -1,0 +1,60 @@
+name: Build Windows executable
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build web UI
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install backend dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r backend/requirements.txt pyinstaller
+
+      - name: Build executable
+        run: pyinstaller packaging/pdfstudio.spec
+
+      - name: Smoke test
+        shell: pwsh
+        run: |
+          $proc = Start-Process -FilePath dist\PDFStudio.exe -ArgumentList "--no-browser","--port","8123" -PassThru
+          $ok = $false
+          foreach ($i in 1..60) {
+            Start-Sleep -Seconds 2
+            try {
+              $resp = Invoke-RestMethod -Uri http://127.0.0.1:8123/api/health -TimeoutSec 3
+              if ($resp.data.app -eq "pdf-studio") { $ok = $true; break }
+            } catch {}
+          }
+          Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+          if (-not $ok) { throw "PDFStudio.exe did not come up" }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PDFStudio-windows
+          path: dist/PDFStudio.exe
+          if-no-files-found: error
