@@ -146,11 +146,31 @@ export interface XfdfImportResult {
 
 export interface PageImage {
   xref: number;
-  bbox: Rect;
+  bbox: Rect; // footprint on the page (rotated bounding box)
+  rect: Rect; // un-rotated placement rectangle
+  angle: number; // visual clockwise rotation in degrees
+  opacity: number;
   width: number;
   height: number;
   editable: boolean;
   uses: number;
+}
+
+export interface ImagePlacement {
+  rect: Rect;
+  angle?: number;
+  opacity?: number;
+  overlay?: boolean;
+}
+
+export interface ImageAdjust {
+  brightness?: number;
+  contrast?: number;
+  saturation?: number;
+  grayscale?: boolean;
+  flip_h?: boolean;
+  flip_v?: boolean;
+  crop?: Rect;
 }
 
 export type FormFieldKind = "text" | "checkbox" | "radio" | "combobox" | "listbox" | "signature" | "button" | "unknown";

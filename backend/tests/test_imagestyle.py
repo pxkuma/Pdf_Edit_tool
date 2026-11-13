@@ -70,7 +70,15 @@ def test_rotation_90_clockwise_puts_red_at_the_top(doc):
 def test_rotation_round_trips_through_list_images(doc):
     xref = place_sample(doc)
     imagestyle.place_image(doc, doc[0], xref, (100, 100, 220, 180), angle=30)
-    assert list_images(doc, doc[0])[0]["angle"] == pytest.approx(30, abs=0.5)
+    info = list_images(doc, doc[0])[0]
+    assert info["angle"] == pytest.approx(30, abs=0.5)
+    assert info["rect"] == pytest.approx((100, 100, 220, 180), abs=0.6)  # the un-rotated rect
+
+
+def test_opacity_round_trips_through_list_images(doc):
+    xref = place_sample(doc)
+    imagestyle.place_image(doc, doc[0], xref, (100, 100, 200, 150), angle=15, opacity=0.35)
+    assert list_images(doc, doc[0])[0]["opacity"] == pytest.approx(0.35)
 
 
 def test_opacity_blends_with_the_page(doc):

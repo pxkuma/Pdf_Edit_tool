@@ -9,6 +9,7 @@ import {
   objectFromSelection,
   pageObjects,
   resizeObject,
+  rotatedBounds,
   sameObject,
   selectionOf,
   textBoxes,
@@ -60,6 +61,7 @@ export function TextEditLayer({ docId, page, model, zoom, pageSize, renderSrc }:
   const selected = useMemo(() => objectFromSelection(storeSelection, page), [storeSelection, page]);
   const setSelected = useCallback((object: PageObject | null) => select(object ? selectionOf(object, page) : null), [select, page]);
   const [preview, setPreview] = useState<Rect | null>(null);
+  const [anglePreview, setAnglePreview] = useState<number | null>(null);
   const [guides, setGuides] = useState<Guides>({});
   const nudgeTimer = useRef<number | undefined>(undefined);
   const lastBoxPress = useRef<{ key: string; at: number }>({ key: "", at: 0 });
@@ -113,7 +115,38 @@ export function TextEditLayer({ docId, page, model, zoom, pageSize, renderSrc }:
     );
 
   // ------------------------------------------------------------ images / graphics
+  /** A rotated image is dragged by its un-rotated placement rect; everything else by its bbox. */
+  const baseRect = (object: PageObject): Rect => (object.kind === "image" && object.angle ? (object.rect ?? object.bbox) : object.bbox);
+
+  /** Commit the full placement of an image: rect, rotation, opacity (rotated images, rotation changes). */
+  const commitPlace = async (object: PageObject, rect: Rect, angle: number) => {
+    const footprint = rotatedBounds(rect, angle);
+    pendingRect.current = footprint;
+    inflight.current += 1;
+    try {
+      const result = await run(() =>
+        api.placeImage(docId, page, object.xref ?? 0, { rect, angle, opacity: object.opacity ?? 1 }),
+      );
+      if (result === undefined) {
+        pendingRect.current = null;
+      } else {
+        const current = objectFromSelection(useEditor.getState().selection, page);
+        if (current && sameObject(current, object)) {
+          setSelected({ ...current, bbox: footprint, hit: footprint, rect, angle });
+        }
+      }
+      setPreview(null);
+      setAnglePreview(null);
+    } finally {
+      inflight.current -= 1;
+    }
+  };
+
   const commitObject = async (object: PageObject, to: Rect) => {
+    if (object.kind === "image" && object.angle) {
+      if (!same(baseRect(object), to, 0.05)) await commitPlace(object, to, object.angle);
+      return;
+    }
     if (same(object.bbox, to, 0.05)) return;
     pendingRect.current = to;
     inflight.current += 1;
@@ -134,6 +167,33 @@ export function TextEditLayer({ docId, page, model, zoom, pageSize, renderSrc }:
     }
   };
 
+  /** Drag to rotate about the frame center. Shift snaps to 15° steps; near-axis angles snap to 0/90/180/270. */
+  const rotateObject = (object: PageObject, event: { clientX: number; clientY: number }, center: { x: number; y: number }) => {
+    const base = anglePreview ?? object.angle ?? 0;
+    const start = Math.atan2(event.clientY - center.y, event.clientX - center.x);
+    let latest = base;
+    trackPointer(
+      event.clientX,
+      event.clientY,
+      (dx, dy, e) => {
+        const now = Math.atan2(event.clientY + dy - center.y, event.clientX + dx - center.x);
+        let angle = (((base + ((now - start) * 180) / Math.PI) % 360) + 360) % 360;
+        if (e.shiftKey) {
+          angle = (Math.round(angle / 15) * 15) % 360;
+        } else {
+          const axis = Math.round(angle / 90) * 90;
+          if (Math.abs(angle - axis) < 4) angle = axis % 360;
+        }
+        latest = Math.round(angle * 10) / 10;
+        setAnglePreview(latest);
+      },
+      () => {
+        if (Math.abs(latest - (object.angle ?? 0)) > 0.1) void commitPlace(object, preview ?? baseRect(object), latest);
+        else setAnglePreview(null);
+      },
+    );
+  };
+
   const dragObject = (object: PageObject, from: Rect, event: { clientX: number; clientY: number }, handle: Handle | null) => {
     const targets = snapTargetsFor(object.bbox);
     let latest = from;
@@ -146,7 +206,15 @@ export function TextEditLayer({ docId, page, model, zoom, pageSize, renderSrc }:
         dragging = true;
         if (handle) {
           const keepAspect = object.kind === "image" ? !e.shiftKey : e.shiftKey;
-          latest = resizeObject(from, handle, dx / zoom, dy / zoom, keepAspect);
+          let rdx = dx;
+          let rdy = dy;
+          if (object.kind === "image" && object.angle) {
+            // The handles are rotated with the frame: map the pointer delta into frame axes.
+            const theta = (-object.angle * Math.PI) / 180;
+            rdx = dx * Math.cos(theta) - dy * Math.sin(theta);
+            rdy = dx * Math.sin(theta) + dy * Math.cos(theta);
+          }
+          latest = resizeObject(from, handle, rdx / zoom, rdy / zoom, keepAspect);
         } else {
           const proposed = moveRect(from, dx / zoom, dy / zoom);
           const box = { x: proposed[0], y: proposed[1], width: proposed[2] - proposed[0], height: proposed[3] - proposed[1] };
@@ -170,12 +238,12 @@ export function TextEditLayer({ docId, page, model, zoom, pageSize, renderSrc }:
     void flushEdit();
     setSelected(object);
     setPreview(null);
-    dragObject(object, object.bbox, event, null);
+    dragObject(object, baseRect(object), event, null);
   };
 
   const nudgeObject = (dx: number, dy: number) => {
     if (!selected) return;
-    const next = moveRect(preview ?? selected.bbox, dx, dy);
+    const next = moveRect(preview ?? baseRect(selected), dx, dy);
     setPreview(next);
     window.clearTimeout(nudgeTimer.current);
     nudgeTimer.current = window.setTimeout(() => void commitObject(selected, next), NUDGE_COMMIT_MS);
@@ -273,15 +341,17 @@ export function TextEditLayer({ docId, page, model, zoom, pageSize, renderSrc }:
       {selected && (
         <ObjectFrame
           key={selected.key}
-          rect={preview ?? selected.bbox}
-          original={selected.bbox}
+          rect={preview ?? baseRect(selected)}
+          original={baseRect(selected)}
           zoom={zoom}
           renderSrc={renderSrc}
           pageSize={pageSize}
           background={objectBackground ?? "#fff"}
           label={selected.kind === "image" ? "Image" : "Graphic"}
-          onBodyDown={(e) => dragObject(selected, preview ?? selected.bbox, e, null)}
-          onHandleDown={(handle, e) => dragObject(selected, preview ?? selected.bbox, e, handle)}
+          angle={anglePreview ?? selected.angle ?? 0}
+          onBodyDown={(e) => dragObject(selected, preview ?? baseRect(selected), e, null)}
+          onHandleDown={(handle, e) => dragObject(selected, preview ?? baseRect(selected), e, handle)}
+          onRotateDown={selected.kind === "image" ? (e, center) => rotateObject(selected, e, center) : undefined}
           onNudge={nudgeObject}
           onDelete={() => void deleteObject()}
           onDeselect={() => setSelected(null)}

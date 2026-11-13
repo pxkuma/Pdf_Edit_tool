@@ -14,6 +14,8 @@ import type {
   FieldProposal,
   FieldValue,
   FormField,
+  ImageAdjust,
+  ImagePlacement,
   NewFieldRequest,
   TabOrder,
   Job,
@@ -255,6 +257,10 @@ export const api = {
   },
   moveImage: (id: string, page: number, xref: number, rect: Rect): Mut =>
     request("POST", `${doc(id)}/images/${page}/${xref}/move`, { rect }),
+  placeImage: (id: string, page: number, xref: number, body: ImagePlacement): Mut =>
+    request("POST", `${doc(id)}/images/${page}/${xref}/place`, body),
+  adjustImage: (id: string, page: number, xref: number, body: ImageAdjust): Mut =>
+    request("POST", `${doc(id)}/images/${page}/${xref}/adjust`, body),
   replaceImage(id: string, page: number, xref: number, file: File): Mut {
     const form = new FormData();
     form.append("file", file);
