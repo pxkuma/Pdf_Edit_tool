@@ -7,7 +7,7 @@ from dataclasses import dataclass, field, replace
 
 import pymupdf as fitz
 
-from . import decor, extract, fontres, ocr, pdfobj, push, textstate
+from . import decor, extract, fontres, ocr, pdfobj, push, scanpatch, textstate
 from .fonts import FontCatalog, FontFace, font_name_rank, style_from_name
 from .geometry import (
     from_display_point,
@@ -497,14 +497,55 @@ def _replace_scanned(doc: fitz.Document, page: fitz.Page, catalog: FontCatalog, 
         if natural > 0:
             style = replace(style, hscale=max(30.0, min(300.0, style.hscale * rect.width / natural)))
     cover = rect + (-0.6, -0.6, 0.6, 0.6)
-    redact_areas(page, [cover], fill=background, images=fitz.PDF_REDACT_IMAGE_PIXELS)
     origin = (span["origin"][0], span["origin"][1])
     if edit.dx or edit.dy:
         move = _display_delta(page, edit.dx, edit.dy)
         origin = (origin[0] + move[0], origin[1] + move[1])
+    if _write_scan_patch(doc, page, catalog, edit, cover, origin, direction, style, replace(request, font=font), background):
+        return _report(plan.chain)
+    redact_areas(page, [cover], fill=background, images=fitz.PDF_REDACT_IMAGE_PIXELS)
     if edit.text.strip():
         write_lines(doc, page, [PlacedLine(origin, direction, glyphs)], style, plan.chain)
     return _report(plan.chain)
+
+
+def _write_scan_patch(doc: fitz.Document, page: fitz.Page, catalog: FontCatalog, edit: SpanEdit,
+                      cover: fitz.Rect, origin: tuple[float, float], direction: tuple[float, float],
+                      style: TextStyle, request: StyleRequest, background: tuple[float, float, float]) -> bool:
+    """Replace a scanned word so the result still looks scanned.
+
+    The paper is inpainted from the surrounding texture, the new text is rasterised and
+    degraded to the scan's blur/noise/ink, and the real text goes underneath invisibly.
+    Returns False when this page cannot take a patch (rotated page, patch too large,
+    Pillow missing); the caller then uses the flat-cover fallback.
+    """
+    if page.rotation or abs(direction[1]) > 0.05:
+        return False
+    try:
+        clip = scanpatch.patch_clip(page, cover)
+
+        def draw(scratch: fitz.Document, scratch_page: fitz.Page) -> None:
+            if not edit.text.strip():
+                return
+            scratch_plan = plan_fonts(scratch, scratch_page, catalog, request, None)
+            scratch_glyphs = scratch_plan.chain.encode(edit.text)
+            shifted = (origin[0] - clip.x0, origin[1] - clip.y0)
+            raster_style = replace(style, color=(0.0, 0.0, 0.0), opacity=1.0, render_mode=0)
+            write_lines(scratch, scratch_page, [PlacedLine(shifted, direction, scratch_glyphs)],
+                        raster_style, scratch_plan.chain)
+
+        patch, clip = scanpatch.build_patch(page, cover, background, style.color, draw)
+    except scanpatch.ScanPatchError:
+        return False
+    # Remove the old pixels and the OCR word under them, then lay the patch over the area.
+    redact_areas(page, [cover], fill=background, images=fitz.PDF_REDACT_IMAGE_PIXELS)
+    page.insert_image(clip, stream=patch, keep_proportion=False)
+    if edit.text.strip():
+        hidden_plan = plan_fonts(doc, page, catalog, request, None)
+        hidden_glyphs = hidden_plan.chain.encode(edit.text)
+        write_lines(doc, page, [PlacedLine(origin, direction, hidden_glyphs)],
+                    replace(style, render_mode=3), hidden_plan.chain)
+    return True
 
 
 def _display_delta(page: fitz.Page, dx: float, dy: float) -> tuple[float, float]:
