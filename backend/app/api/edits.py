@@ -7,7 +7,7 @@ from dataclasses import asdict
 from fastapi import APIRouter, File, Form, UploadFile
 
 from .. import deps
-from ..pdf import annots, doctools, images, textedit
+from ..pdf import annots, doctools, images, imagestyle, textedit
 from ..pdf.annots import AnnotStyle
 from ..pdf.doctools import StampStyle
 from ..pdf.push import PushItem, PushRequest
@@ -146,6 +146,27 @@ def move_image(doc_id: str, page: int, xref: int, body: schemas.ImageMoveBody) -
         return Mutation(changed=frozenset({page}))  # pages sharing the image object are untouched
 
     return mutate(doc_id, "Moved image", run)
+
+
+@router.post("/images/{page}/{xref}/place")
+def place_image(doc_id: str, page: int, xref: int, body: schemas.ImagePlaceBody) -> dict:
+    def run(doc):
+        pg = check_page(doc, page)
+        imagestyle.place_image(doc, pg, xref, body.rect, body.angle, body.opacity, body.overlay)
+        return Mutation(changed=frozenset({page}))
+
+    return mutate(doc_id, "Transformed image", run)
+
+
+@router.post("/images/{page}/{xref}/adjust")
+def adjust_image(doc_id: str, page: int, xref: int, body: schemas.ImageAdjustBody) -> dict:
+    adjustments = imagestyle.Adjustments(**body.model_dump())
+
+    def run(doc):
+        imagestyle.adjust_image(doc, check_page(doc, page), xref, adjustments)
+        return Mutation(changed=frozenset({page}))
+
+    return mutate(doc_id, "Adjusted image", run)
 
 
 @router.post("/images/{page}/{xref}/replace")

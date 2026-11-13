@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 from typing import Callable, Mapping
 
@@ -68,9 +69,12 @@ def list_images(doc: fitz.Document, page: fitz.Page, usage: Callable[[], Mapping
             continue
         if xref > 0 and counts is None:
             counts = usage() if usage else usage_counts(doc)
+        transform = fitz.Matrix(info["transform"])
+        angle = round((math.degrees(math.atan2(transform.b, transform.a)) + page.rotation) % 360, 1)
         items.append({
             "xref": xref,
             "bbox": to_display_rect(page, info["bbox"]),
+            "angle": angle,
             "width": info.get("width"),
             "height": info.get("height"),
             "editable": xref > 0,
@@ -152,7 +156,7 @@ def _unplace(page: fitz.Page, names: list[str]) -> None:
     gets private copies of them; only those copies are edited.
     """
     doc = page.parent
-    holder, prefix = _private_xobject_dict(doc, page)
+    holder, prefix = private_resource_dict(doc, page, "XObject")
     content = page.read_contents()
     for name in names:
         content = re.sub(rb"(?<![\w#])/" + re.escape(name.encode()) + rb"\s+Do(?![\w*'\"])", b" ", content)
@@ -163,10 +167,10 @@ def _unplace(page: fitz.Page, names: list[str]) -> None:
     page.set_contents(stream)
 
 
-def _private_xobject_dict(doc: fitz.Document, page: fitz.Page) -> tuple[int, str]:
-    """Give ``page`` its own /Resources and /XObject dictionaries; return (object, key path) of the latter."""
+def private_resource_dict(doc: fitz.Document, page: fitz.Page, category: str = "XObject") -> tuple[int, str]:
+    """Give ``page`` its own /Resources and /<category> dictionaries; return (object, key path) of the latter."""
     holder, prefix = _private_resources(doc, page)
-    path = f"{prefix}/XObject" if prefix else "XObject"
+    path = f"{prefix}/{category}" if prefix else category
     kind, value = doc.xref_get_key(holder, path)
     if kind == "xref":
         own = _clone_dict(doc, int(value.split()[0]))
@@ -174,7 +178,10 @@ def _private_xobject_dict(doc: fitz.Document, page: fitz.Page) -> tuple[int, str
         return own, ""
     if kind == "dict":
         return holder, path
-    raise ImageError("This page's image resources could not be read.")
+    if kind in ("null", "none"):
+        doc.xref_set_key(holder, path, "<<>>")
+        return holder, path
+    raise ImageError("This page's resources could not be read.")
 
 
 def _private_resources(doc: fitz.Document, page: fitz.Page) -> tuple[int, str]:

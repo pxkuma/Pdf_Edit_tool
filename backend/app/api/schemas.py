@@ -308,6 +308,26 @@ class ImageMoveBody(BaseModel):
     rect: Rect
 
 
+class ImagePlaceBody(BaseModel):
+    """Full placement state of one image on one page: position, rotation, opacity, stacking."""
+
+    rect: Rect
+    angle: float = Field(0, ge=-360, le=360)
+    opacity: float = Field(1, gt=0, le=1)
+    overlay: bool = True
+
+
+class ImageAdjustBody(BaseModel):
+    brightness: float = Field(1, ge=0.1, le=3)
+    contrast: float = Field(1, ge=0.1, le=3)
+    saturation: float = Field(1, ge=0, le=3)
+    grayscale: bool = False
+    flip_h: bool = False
+    flip_v: bool = False
+    crop: tuple[float, float, float, float] | None = Field(
+        None, description="left, top, right, bottom as fractions of the image")
+
+
 class OcrBody(BaseModel):
     pages: str | None = Field(None, max_length=500)
     language: str = Field("eng", pattern=r"^[A-Za-z_]+(\+[A-Za-z_]+)*$", max_length=100)
