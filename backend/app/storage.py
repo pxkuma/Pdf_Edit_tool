@@ -108,6 +108,30 @@ class Mutation:
     result: Any = None
 
 
+REPLACE_ATTEMPTS = 20
+REPLACE_PAUSE_SECONDS = 0.02
+
+
+def _replace_file(source: Path, target: Path) -> None:
+    """Atomic rename over ``target``. Windows refuses while another thread has ``target`` open, so retry briefly."""
+    for attempt in range(REPLACE_ATTEMPTS):
+        try:
+            source.replace(target)
+            return
+        except PermissionError:
+            if attempt == REPLACE_ATTEMPTS - 1:
+                raise
+            time.sleep(REPLACE_PAUSE_SECONDS)
+
+
+def _remove_file(path: Path) -> None:
+    """Delete a version file. A file Windows still holds open is left for the expiry cleanup, not an error."""
+    try:
+        path.unlink(missing_ok=True)
+    except PermissionError:
+        log.warning("Could not delete %s yet (in use); it is removed when the document expires", path)
+
+
 def new_token() -> str:
     return secrets.token_hex(6)
 
@@ -186,13 +210,13 @@ class DocumentStore:
         path = self._state_path(doc_id)
         if not path.exists():
             raise DocumentNotFound(doc_id)
-        return DocState.from_json(json.loads(path.read_text()))
+        return DocState.from_json(json.loads(path.read_text(encoding="utf-8")))
 
     def _save_state(self, state: DocState) -> None:
         path = self._state_path(state.id)
         tmp = path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(state.to_json()))
-        tmp.replace(path)
+        tmp.write_text(json.dumps(state.to_json()), encoding="utf-8")
+        _replace_file(tmp, path)
 
     def update_meta(self, doc_id: str, **values: Any) -> DocState:
         with PDF_LOCK:
@@ -321,7 +345,7 @@ class DocumentStore:
             finally:
                 doc.close()
         finally:
-            scratch.unlink(missing_ok=True)
+            _remove_file(scratch)
         return payload, mutation, old_count, new_count
 
     def replace_if_current(self, doc_id: str, expected_file: str, label: str, payload: bytes) -> DocState:
@@ -333,15 +357,16 @@ class DocumentStore:
 
     def _append_version(self, state: DocState, label: str, payload: bytes, tokens: tuple[str, ...]) -> DocState:
         directory = self._dir(state.id)
+        self._drop_cache(state.id)  # Windows cannot delete a file a cached handle still has open
         kept = list(state.versions[: state.cursor + 1])
         for dropped in state.versions[state.cursor + 1:]:
-            (directory / dropped.file).unlink(missing_ok=True)
+            _remove_file(directory / dropped.file)
         number = int(kept[-1].file[1:5]) + 1 if kept else 0
         version = Version(f"v{number % 10000:04d}.pdf", label[:80], tokens, time.time(), len(payload))
         (directory / version.file).write_bytes(payload)
         kept.append(version)
         while len(kept) > self.max_history or (len(kept) > 2 and sum(v.size for v in kept) > MAX_HISTORY_BYTES):
-            (directory / kept.pop(0).file).unlink(missing_ok=True)
+            _remove_file(directory / kept.pop(0).file)
         new_state = replace(state, versions=tuple(kept), cursor=len(kept) - 1)
         self._save_state(new_state)
         return new_state

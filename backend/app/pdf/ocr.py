@@ -11,13 +11,14 @@ from __future__ import annotations
 import csv
 import io
 import logging
-import shutil
 import subprocess
+import sys
 from dataclasses import dataclass, field
 from functools import lru_cache
 
 import pymupdf as fitz
 
+from .. import paths
 from .fonts import FontCatalog
 from .geometry import from_display_point, from_display_vector
 from .redaction import redact_areas
@@ -35,8 +36,21 @@ class OcrError(RuntimeError):
     pass
 
 
+INSTALL_HINT = (
+    "Tesseract is not installed, so OCR is unavailable. Install it (Windows: "
+    "https://github.com/UB-Mannheim/tesseract/wiki, macOS: brew install tesseract, "
+    "Linux: your package manager) and restart PDF Studio."
+)
+
+
 def tesseract_path() -> str | None:
-    return shutil.which("tesseract")
+    """Tesseract on ``PATH`` or in its usual install folder (the Windows installer does not add it to ``PATH``)."""
+    return paths.find_tesseract()
+
+
+def _subprocess_options() -> dict:
+    """Keep a console window from flashing up for each OCR call in a windowed Windows build."""
+    return {"creationflags": subprocess.CREATE_NO_WINDOW} if sys.platform == "win32" else {}
 
 
 @lru_cache(maxsize=1)
@@ -45,10 +59,12 @@ def languages() -> tuple[str, ...]:
     if not exe:
         return ()
     try:
-        out = subprocess.run([exe, "--list-langs"], capture_output=True, text=True, timeout=20, check=False)
+        out = subprocess.run([exe, "--list-langs"], capture_output=True, text=True, timeout=20, check=False,
+                             **_subprocess_options())
     except (OSError, subprocess.SubprocessError):
         return ()
-    langs = [line.strip() for line in out.stdout.splitlines()[1:] if line.strip() and line.strip() != "osd"]
+    listing = out.stdout or out.stderr  # Tesseract 4.0 and earlier print the list on stderr
+    langs = [line.strip() for line in listing.splitlines()[1:] if line.strip() and line.strip() != "osd"]
     return tuple(sorted(langs))
 
 
@@ -83,10 +99,11 @@ def render_for_ocr(page: fitz.Page, dpi: int) -> tuple[bytes, float]:
 def run_tesseract(png: bytes, language: str, dpi: int) -> str:
     exe = tesseract_path()
     if not exe:
-        raise OcrError("Tesseract is not installed. Use the Docker image, which includes it.")
+        raise OcrError(INSTALL_HINT)
     command = [exe, "stdin", "stdout", "-l", language, "--dpi", str(dpi), "--psm", "3", "tsv"]
     try:
-        result = subprocess.run(command, input=png, capture_output=True, timeout=OCR_TIMEOUT_SECONDS, check=False)
+        result = subprocess.run(command, input=png, capture_output=True, timeout=OCR_TIMEOUT_SECONDS, check=False,
+                                **_subprocess_options())
     except subprocess.TimeoutExpired as exc:
         raise OcrError("OCR took too long for this page.") from exc
     except OSError as exc:

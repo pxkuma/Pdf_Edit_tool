@@ -115,7 +115,8 @@ export function OcrDialog() {
     >
       {info && !info.available && (
         <p className="note warn" style={{ margin: 0 }}>
-          OCR is not available on this server. Run PDF Studio with Docker, which includes Tesseract.
+          OCR needs Tesseract, which is not installed on this computer. Install it (Windows: github.com/UB-Mannheim/tesseract/wiki,
+          macOS: brew install tesseract) and restart PDF Studio, or run PDF Studio with Docker, which includes it.
         </p>
       )}
       <p className="muted" style={{ margin: 0 }}>

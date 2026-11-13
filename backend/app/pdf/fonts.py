@@ -264,7 +264,7 @@ class FontCatalog:
         signature = self._signature(files)
         if self._cache_file and self._cache_file.exists():
             try:
-                cached = json.loads(self._cache_file.read_text())
+                cached = json.loads(self._cache_file.read_text(encoding="utf-8"))
                 if cached.get("signature") == signature:
                     return [FontFace(**item) for item in cached["faces"]]
             except (ValueError, TypeError, OSError, KeyError, AttributeError):
@@ -274,7 +274,7 @@ class FontCatalog:
             try:
                 self._cache_file.parent.mkdir(parents=True, exist_ok=True)
                 payload = {"signature": signature, "faces": [asdict(face) for face in faces]}
-                self._cache_file.write_text(json.dumps(payload))
+                self._cache_file.write_text(json.dumps(payload), encoding="utf-8")
             except OSError:
                 log.warning("Could not write font cache %s", self._cache_file)
         return faces

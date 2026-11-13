@@ -8,11 +8,11 @@ from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import FileResponse, JSONResponse
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import JSONResponse
 
 from . import deps
 from .api import comments, documents, edits, fonts, ocr, pages, signatures
+from .frontend import mount_frontend
 from .pdf.annots import AnnotationError
 from .pdf.doctools import ToolError
 from .pdf.forms import FormError
@@ -105,22 +105,7 @@ app.include_router(signatures.router)
 
 @app.get("/api/health")
 def health() -> dict:
-    return {"ok": True, "data": {"status": "up"}}
+    return {"ok": True, "data": {"status": "up", "app": "pdf-studio"}}
 
 
-_static = deps.settings().static_dir
-if (_static / "assets").exists():
-    app.mount("/assets", StaticFiles(directory=_static / "assets"), name="assets")
-
-
-@app.get("/{path:path}", include_in_schema=False)
-def spa(path: str) -> FileResponse:
-    if path.startswith("api/"):
-        raise HTTPException(status_code=404, detail="Not found")
-    candidate = (_static / path).resolve()
-    if path and candidate.is_file() and _static.resolve() in candidate.parents:
-        return FileResponse(candidate)
-    index = _static / "index.html"
-    if not index.exists():
-        raise HTTPException(status_code=404, detail="Frontend not built. Run the Docker image or `npm run build`.")
-    return FileResponse(index, headers={"Cache-Control": "no-cache"})
+mount_frontend(app, deps.settings().static_dir)  # last: its catch-all route must not shadow the API
