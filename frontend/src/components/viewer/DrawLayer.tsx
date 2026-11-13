@@ -3,6 +3,7 @@ import { api } from "../../api/client";
 import type { Point, Rect } from "../../api/types";
 import { flushEdit } from "../../lib/editSession";
 import { cssRect, normRect, rectHeight, rectWidth } from "../../lib/geometry";
+import { removedNote } from "../../lib/redaction";
 import { useEditor, type Tool } from "../../store/editor";
 import { NewTextEditor } from "./NewTextEditor";
 import { ToolPopover, type PopoverState } from "./ToolPopover";
@@ -18,7 +19,7 @@ interface DrawLayerProps {
   snapRects?: Rect[]; // text on the page, for smart guides when adding text
 }
 
-const RECT_TOOLS: Tool[] = ["rect", "ellipse", "textbox", "whiteout", "redact", "eraseText", "crop", "fieldText", "fieldCheckbox", "image"];
+const RECT_TOOLS: Tool[] = ["rect", "ellipse", "textbox", "whiteout", "redact", "eraseText", "crop", "fieldText", "fieldCheckbox", "image", "signField"];
 const LINE_TOOLS: Tool[] = ["line", "arrow"];
 
 function arrowHead(a: Point, b: Point, size: number): string {
@@ -37,7 +38,7 @@ export function DrawLayer({ docId, page, zoom, tool, pageSize, pageRef, snapRect
   const [popover, setPopover] = useState<PopoverState | null>(null);
   const [newText, setNewText] = useState<{ x: number; y: number; width: number | null } | null>(null);
   const drawing = useRef(false);
-  const { run, ink, shape, redactColor, placement, setPlacement, setTool } = useEditor();
+  const { run, toast, ink, shape, redactColor, redactSanitize, placement, setPlacement, setTool, setSignTarget, openDialog } = useEditor();
 
   useEffect(() => {
     setPopover(null);
@@ -133,7 +134,8 @@ export function DrawLayer({ docId, page, zoom, tool, pageSize, pageRef, snapRect
         const mode = tool === "eraseText" ? "text" : tool;
         const color = tool === "whiteout" ? "#ffffff" : redactColor;
         const label = tool === "redact" ? "Area redacted" : tool === "whiteout" ? "Whiteout applied" : "Text erased";
-        await run(() => api.redact(docId, page, [rect], mode, color), label);
+        const result = await run(() => api.redact(docId, page, [rect], mode, color, redactSanitize));
+        if (result) toast(`${label}${removedNote(result)}`, "success");
         return;
       }
       case "image": {
@@ -158,6 +160,13 @@ export function DrawLayer({ docId, page, zoom, tool, pageSize, pageRef, snapRect
       case "crop":
         if (!isClick) setPopover({ kind: "crop", rect });
         return;
+      case "signField": {
+        const box: Rect = isClick ? [a[0], a[1], a[0] + 180, a[1] + 50] : rect;
+        setSignTarget({ page, rect: box });
+        setTool("select");
+        openDialog("digitalSign");
+        return;
+      }
       case "fieldText":
       case "fieldCheckbox": {
         const fieldRect: Rect = isClick
@@ -173,7 +182,7 @@ export function DrawLayer({ docId, page, zoom, tool, pageSize, pageRef, snapRect
   };
 
   const dragRect = start && current && (RECT_TOOLS.includes(tool) || tool === "addText") ? normRect(start, current) : null;
-  const dragClass = tool === "redact" ? " redact" : tool === "whiteout" ? " whiteout" : "";
+  const dragClass = tool === "redact" ? " redact" : tool === "whiteout" ? " whiteout" : tool === "signField" ? " sign-field" : "";
   const [pw, ph] = placementSize();
 
   return (

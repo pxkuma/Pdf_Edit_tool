@@ -8,6 +8,7 @@ import { useEditor } from "../../store/editor";
 import { ColorPicker } from "../common/ColorPicker";
 import { NumberField } from "../common/NumberField";
 import { annotationStyle } from "../viewer/ObjectLayer";
+import { ImageAdjustControls } from "./ImageAdjustControls";
 import { ObjectGeometry } from "./ObjectGeometry";
 
 function useSelectedObject() {
@@ -67,13 +68,52 @@ export function SelectedObjectProps() {
 
   if (selection.kind === "image") {
     const image = object as PageImage;
+    const place = (patch: Partial<{ rect: typeof image.rect; angle: number; opacity: number; overlay: boolean }>, label = "Image updated") =>
+      run(
+        () =>
+          api.placeImage(doc.id, selection.page, image.xref, {
+            rect: image.rect ?? image.bbox,
+            angle: image.angle ?? 0,
+            opacity: image.opacity ?? 1,
+            ...patch,
+          }),
+        label,
+      );
+    const adjust = (body: Parameters<typeof api.adjustImage>[3], label: string) =>
+      run(() => api.adjustImage(doc.id, selection.page, image.xref, body), label);
     return (
       <div className="prop-section">
         <h4>Image</h4>
         <div className="note">
           {image.width} × {image.height} px
-          {image.uses > 1 && <div style={{ color: "var(--warning)" }}>Used {image.uses}× in this document — changes apply to every copy.</div>}
+          {image.uses > 1 && <div style={{ color: "var(--warning)" }}>Used {image.uses}× in this document — replacing it changes every copy.</div>}
         </div>
+        <div className="grid-2">
+          <label className="field">
+            <span>Rotation</span>
+            <NumberField value={Math.round((image.angle ?? 0) * 10) / 10} min={0} max={359} step={1} suffix="°" onChange={(angle) => void place({ angle }, "Rotated")} />
+          </label>
+          <label className="field">
+            <span>Opacity</span>
+            <NumberField
+              value={Math.round((image.opacity ?? 1) * 100)}
+              min={5}
+              max={100}
+              step={5}
+              suffix="%"
+              onChange={(v) => void place({ opacity: v / 100 }, "Opacity changed")}
+            />
+          </label>
+        </div>
+        <div className="grid-2">
+          <button className="btn small" onClick={() => void place({ overlay: true }, "Brought to front")}>
+            Bring to front
+          </button>
+          <button className="btn small" onClick={() => void place({ overlay: false }, "Sent to back")}>
+            Send to back
+          </button>
+        </div>
+        <ImageAdjustControls onApply={adjust} />
         <button
           className="btn small"
           onClick={async () => {

@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointer
 import { api } from "../../api/client";
 import type { PageModel, Point, Rect, Word } from "../../api/types";
 import { contains, cssRect, mergeLineRects } from "../../lib/geometry";
+import { removedNote } from "../../lib/redaction";
 import { useEditor } from "../../store/editor";
 import { usePagePoint } from "./usePointer";
 
@@ -45,6 +46,7 @@ export function WordSelectLayer({ docId, page, model, zoom, markup, pageRef }: W
   const toPoint = usePagePoint(pageRef, zoom);
   const run = useEditor((s) => s.run);
   const markupStyle = useEditor((s) => s.markup);
+  const sanitize = useEditor((s) => s.redactSanitize);
   const toast = useEditor((s) => s.toast);
 
   useEffect(() => setRange(null), [model]);
@@ -107,7 +109,8 @@ export function WordSelectLayer({ docId, page, model, zoom, markup, pageRef }: W
   const redact = async () => {
     const rects = lineRects;
     setRange(null);
-    await run(() => api.redact(docId, page, rects, "redact", "#000000"), "Text redacted");
+    const result = await run(() => api.redact(docId, page, rects, "redact", "#000000", sanitize));
+    if (result) toast(`Text redacted${removedNote(result)}`, "success");
   };
 
   const barAnchor = lineRects[0];

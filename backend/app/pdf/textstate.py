@@ -65,6 +65,7 @@ class TextRecord:
     axis_x: float  # length of the text-space x axis in page units (Tm x CTM)
     axis_y: float  # length of the text-space y axis in page units
     skew: float  # shear of the y axis along the baseline
+    codes: tuple[bytes, ...] = ()  # distinct character codes shown, most frequent first
 
     # ----- values normalised to page units (what the writer consumes) -----
     @property
@@ -108,6 +109,16 @@ class _State:
 
     def copy(self) -> "_State":
         return replace(self)
+
+
+def _shown_codes(parts: list, step: int) -> tuple[bytes, ...]:
+    counts: dict[bytes, int] = {}
+    for part in parts:
+        if isinstance(part, bytes):
+            for i in range(0, len(part) - step + 1, step):
+                code = part[i:i + step]
+                counts[code] = counts.get(code, 0) + 1
+    return tuple(sorted(counts, key=lambda code: -counts[code]))
 
 
 def _num(value: object, default: float = 0.0) -> float:
@@ -167,7 +178,7 @@ class _Interpreter:
         return total
 
     # -------------------------------------------------------------- recording
-    def _record(self, state: _State, tm: fitz.Matrix) -> None:
+    def _record(self, state: _State, tm: fitz.Matrix, codes: tuple[bytes, ...] = ()) -> None:
         if state.font is None:
             return
         trm = tm * state.ctm
@@ -204,13 +215,14 @@ class _Interpreter:
             axis_x=lx,
             axis_y=ly,
             skew=skew,
+            codes=codes,
         ))
 
     def _show(self, state: _State, tm: fitz.Matrix, payload: object) -> fitz.Matrix:
         """Record a text-showing operator; return the text matrix after it."""
-        self._record(state, tm)
         font = self._font(self._font_xref(state.font)) if state.font else None
         parts = payload if isinstance(payload, list) else [payload]
+        self._record(state, tm, _shown_codes(parts, font.code_bytes if font else 1))
         tx = 0.0
         for part in parts:
             if isinstance(part, bytes):

@@ -6,3 +6,4 @@ backend/data/
 backend/static/
 *.pyc
 .coverage
+*.tsbuildinfo

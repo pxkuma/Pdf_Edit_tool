@@ -10,7 +10,8 @@ import { Modal } from "../common/Modal";
 const SAVED_KEY = "pdfstudio.signatures";
 const SCRIPT_FONTS = ["Dancing Script", "Great Vibes", "cursive"];
 
-function loadSaved(): string[] {
+/** Signature images saved in this browser (PNG data URLs), newest first. */
+export function loadSaved(): string[] {
   try {
     const parsed = JSON.parse(localStorage.getItem(SAVED_KEY) || "[]") as unknown;
     return Array.isArray(parsed) ? parsed.filter((s): s is string => typeof s === "string" && s.startsWith("data:image/png")) : [];

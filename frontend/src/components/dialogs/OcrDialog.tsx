@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "../../api/client";
 import type { Job, OcrCapabilities } from "../../api/types";
 import { flushEdit } from "../../lib/editSession";
+import { missingCharsWarning } from "../../lib/missingChars";
 import { errorMessage, useEditor } from "../../store/editor";
 import { Modal } from "../common/Modal";
 
@@ -20,6 +21,7 @@ interface OcrResult {
   pages: number[];
   words: number;
   skipped: number[];
+  missing_chars: string[];
 }
 
 export function OcrDialog() {
@@ -67,6 +69,8 @@ export function OcrDialog() {
         const result = next.result;
         const skipped = result?.skipped.length ? ` ${result.skipped.length} page(s) changed during OCR and were skipped.` : "";
         toast(result && result.pages.length ? `Text recognised: ${result.words} words on ${result.pages.length} page(s).${skipped}` : next.message, "success");
+        const missing = missingCharsWarning(result?.missing_chars);
+        if (missing) toast(missing, "warning");
         openDialog(null);
       } catch (error) {
         toast(errorMessage(error), "error");
@@ -77,6 +81,7 @@ export function OcrDialog() {
 
   const start = async () => {
     await flushEdit();
+    if (!(await useEditor.getState().confirmSignedEdit())) return;
     const pages = scope === "all" ? null : scope === "current" ? String(currentPage + 1) : range;
     try {
       const started = await api.startOcr(doc.id, { pages, language: languages.join("+"), dpi, force });
@@ -110,7 +115,8 @@ export function OcrDialog() {
     >
       {info && !info.available && (
         <p className="note warn" style={{ margin: 0 }}>
-          OCR is not available on this server. Run PDF Studio with Docker, which includes Tesseract.
+          OCR needs Tesseract, which is not installed on this computer. Install it (Windows: github.com/UB-Mannheim/tesseract/wiki,
+          macOS: brew install tesseract) and restart PDF Studio, or run PDF Studio with Docker, which includes it.
         </p>
       )}
       <p className="muted" style={{ margin: 0 }}>

@@ -1,6 +1,7 @@
 .app {
   display: grid;
-  grid-template-rows: var(--topbar-h) auto minmax(0, 1fr);
+  /* title bar, ribbon, signature bar (empty unless the document is signed), workspace */
+  grid-template-rows: var(--topbar-h) auto auto minmax(0, 1fr);
   height: 100%;
 }
 
@@ -140,6 +141,7 @@
 
 /* Main area ---------------------------------------------------------------- */
 .main {
+  grid-row: 4;
   display: flex;
   min-height: 0;
   min-width: 0;

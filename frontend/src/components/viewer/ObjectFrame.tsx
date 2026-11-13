@@ -4,15 +4,17 @@ import type { Handle } from "../../lib/geometry";
 import { NUDGE } from "../../lib/snap";
 
 interface ObjectFrameProps {
-  rect: Rect; // where the object is shown now (page points)
+  rect: Rect; // where the object is shown now (page points; un-rotated placement rect)
   original: Rect; // where it really is
   zoom: number;
   renderSrc: string | null;
   pageSize: [number, number];
   background: string; // colour that hides the original while it is being moved
   label: string;
+  angle?: number; // visual clockwise rotation shown on the frame
   onBodyDown: (event: ReactPointerEvent) => void;
   onHandleDown: (handle: Handle, event: ReactPointerEvent) => void;
+  onRotateDown?: (event: ReactPointerEvent, center: { x: number; y: number }) => void;
   onNudge: (dx: number, dy: number) => void;
   onDelete: () => void;
   onDeselect: () => void;
@@ -34,6 +36,7 @@ const box = (r: Rect, zoom: number): CSSProperties => ({
  */
 export function ObjectFrame(props: ObjectFrameProps) {
   const { rect, original, zoom, renderSrc, pageSize, background, label } = props;
+  const angle = props.angle ?? 0;
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => ref.current?.focus({ preventScroll: true }), []);
 
@@ -64,12 +67,12 @@ export function ObjectFrame(props: ObjectFrameProps) {
 
   return (
     <>
-      {changed && <div className="obj-cover" style={{ ...box(original, zoom), background }} />}
-      {changed && <div className="obj-ghost" style={ghost} />}
+      {changed && !angle && <div className="obj-cover" style={{ ...box(original, zoom), background }} />}
+      {changed && !angle && <div className="obj-ghost" style={ghost} />}
       <div
         ref={ref}
         className="obj-frame"
-        style={box(rect, zoom)}
+        style={{ ...box(rect, zoom), transform: angle ? `rotate(${angle}deg)` : undefined }}
         tabIndex={0}
         role="group"
         aria-label={`${label} — drag to move, handles resize, Delete removes`}
@@ -89,6 +92,18 @@ export function ObjectFrame(props: ObjectFrameProps) {
             }}
           />
         ))}
+        {props.onRotateDown && (
+          <span
+            className="handle rotate"
+            title="Drag to rotate (Shift: 15° steps)"
+            onPointerDown={(e) => {
+              e.stopPropagation();
+              const frame = ref.current?.getBoundingClientRect();
+              if (!frame) return;
+              props.onRotateDown?.(e, { x: frame.left + frame.width / 2, y: frame.top + frame.height / 2 });
+            }}
+          />
+        )}
       </div>
     </>
   );

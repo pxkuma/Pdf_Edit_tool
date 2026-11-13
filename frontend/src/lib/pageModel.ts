@@ -18,11 +18,18 @@ function key(docId: string, page: number, token: string): string {
   return `${docId}:${page}:${token}`;
 }
 
+/** The server answers for the revision it is asked about; anything else must never be cached under this token. */
+async function fetchModel(docId: string, page: number, token: string): Promise<PageModel> {
+  const model = await api.pageModel(docId, page, token);
+  if (model.token !== token) throw new Error("This page has changed since it was requested.");
+  return model;
+}
+
 export function loadPageModel(docId: string, page: number, token: string): Promise<PageModel> {
   const k = key(docId, page, token);
   let promise = cache.get(k);
   if (!promise) {
-    promise = api.pageModel(docId, page);
+    promise = fetchModel(docId, page, token);
     promise.catch(() => cache.delete(k));
     cache.set(k, promise);
     if (cache.size > MAX_ENTRIES) {

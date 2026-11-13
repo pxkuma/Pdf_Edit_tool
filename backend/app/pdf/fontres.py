@@ -8,15 +8,30 @@ surrounding text, instead of an approximation.
 
 from __future__ import annotations
 
+import logging
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from functools import cached_property
 
 import pymupdf as fitz
 
-from . import cmap, fontcheck, pdfobj
+from . import cmap, encodings, fontcheck, fontprog, pdfobj
+
+log = logging.getLogger(__name__)
 
 SUBSET_PREFIX = re.compile(r"^[A-Z]{6}\+")
 TAG_KEY = "PDFStudioFont"
+
+# Latin presentation forms (U+FB00-FB06) and their decompositions. ToUnicode
+# CMaps map a ligature glyph to either one, and extracted text may hold either.
+_LIGATURE_FORMS = {"ﬀ": "ff", "ﬁ": "fi", "ﬂ": "fl", "ﬃ": "ffi",
+                   "ﬄ": "ffl", "ﬅ": "st", "ﬆ": "st"}
+LIGATURE_DECOMPOSITION = dict(_LIGATURE_FORMS)
+LIGATURE_ALTERNATIVES: dict[str, tuple[str, ...]] = {
+    **{form: (text,) for form, text in _LIGATURE_FORMS.items()},
+    **{text: tuple(f for f, t in _LIGATURE_FORMS.items() if t == text) for text in set(_LIGATURE_FORMS.values())},
+}
+MAX_LIGATURE = 3
 
 
 def clean_font_name(name: str) -> str:
@@ -38,13 +53,51 @@ class EmbeddedFont:
     default_width: float = 500.0
     width_scale: float = 1.0
     embedded: bool = True
+    # code -> text of every mapped code (``reverse`` keeps one code per text)
+    forward: dict[bytes, str] = field(default_factory=dict)
 
     @property
     def display_name(self) -> str:
         return clean_font_name(self.base_name)
 
-    def code_for(self, char: str) -> bytes | None:
-        return self.reverse.get(char)
+    def code_for(self, text: str) -> bytes | None:
+        """Code of a character or ligature ("fi" and U+FB01 are interchangeable)."""
+        code = self.reverse.get(text)
+        if code is None:
+            for alternative in LIGATURE_ALTERNATIVES.get(text, ()):
+                code = self.reverse.get(alternative)
+                if code is not None:
+                    break
+        return code
+
+    @cached_property
+    def _longest_key(self) -> int:
+        lengths = [len(key) for key in self.reverse if len(key) <= MAX_LIGATURE]
+        if any(len(form) == 1 for form in self.reverse if form in LIGATURE_ALTERNATIVES):
+            lengths.append(MAX_LIGATURE)  # a presentation form stands for its decomposition
+        return max(lengths, default=1)
+
+    def segments(self, text: str) -> list[tuple[str, bytes | None]]:
+        """Split text greedily into the longest pieces (ligatures first) with a code."""
+        result: list[tuple[str, bytes | None]] = []
+        pos = 0
+        while pos < len(text):
+            for size in range(min(self._longest_key, len(text) - pos), 0, -1):
+                piece = text[pos:pos + size]
+                code = self.code_for(piece)
+                if code is not None or size == 1:
+                    result.append((piece, code))
+                    pos += size
+                    break
+        return result
+
+    def preferring(self, codes: tuple[bytes, ...]) -> "EmbeddedFont":
+        """A copy whose reverse map uses ``codes`` (most frequent first) where several
+        codes draw the same text, e.g. the old-style figures a span was set in.
+        Codes the original text showed are drawn by the font, so no check is needed."""
+        chosen = {self.forward[code]: code for code in reversed(codes) if self.forward.get(code)}
+        changed = {text: code for text, code in chosen.items() if text in self.reverse and self.reverse[text] != code}
+        return replace(self, reverse={**self.reverse, **changed}) if changed else self
 
     def width_of(self, code: bytes) -> float:
         """Advance width of a code in 1/1000 em."""
@@ -54,12 +107,24 @@ class EmbeddedFont:
         chars = [c for c in text if not c.isspace()]
         if not chars:
             return 1.0
-        return sum(1 for c in chars if c in self.reverse) / len(chars)
+        covered = sum(len(piece) for piece, code in self.segments(text) if code is not None and not piece.isspace())
+        return min(1.0, covered / len(chars))
 
 
 def analyze_font(doc: fitz.Document, xref: int, verify: bool = True) -> EmbeddedFont | None:
     """Analyse a font object. ``verify`` checks glyph presence in the font program
-    (needed before writing with the font; not needed for width calculations)."""
+    (needed before writing with the font; not needed for width calculations).
+
+    A malformed font gives None (the editor then uses a substitute), never an error.
+    """
+    try:
+        return _analyze(doc, xref, verify)
+    except Exception:  # noqa: BLE001 - hostile or broken font objects
+        log.warning("Could not analyse font %s", xref, exc_info=True)
+        return None
+
+
+def _analyze(doc: fitz.Document, xref: int, verify: bool) -> EmbeddedFont | None:
     subtype = pdfobj.read_name(doc, xref, "Subtype")
     base = pdfobj.read_name(doc, xref, "BaseFont") or f"Font{xref}"
     if subtype == "Type0":
@@ -69,7 +134,7 @@ def analyze_font(doc: fitz.Document, xref: int, verify: bool = True) -> Embedded
     return None
 
 
-def _tounicode(doc: fitz.Document, xref: int) -> tuple[dict[bytes, str], int | None]:
+def read_tounicode(doc: fitz.Document, xref: int) -> tuple[dict[bytes, str], int | None]:
     kind, value = pdfobj.get_key(doc, xref, "ToUnicode")
     target = pdfobj.ref_xref(value) if kind == "xref" else None
     if target is None:
@@ -86,11 +151,23 @@ def _invert(mapping: dict[bytes, str]) -> dict[str, bytes]:
     return reverse
 
 
+def _with_code_length(mapping: dict[bytes, str], length: int) -> dict[bytes, str]:
+    """Keys of ``length`` bytes. Broken producers write e.g. 1-byte ``<41>`` keys for
+    a 2-byte Identity-H font: those are kept by numeric value when nothing else maps it."""
+    result = {code: text for code, text in mapping.items() if len(code) == length}
+    limit = 1 << (8 * length)
+    for code, text in mapping.items():
+        value = int.from_bytes(code, "big")
+        if code and len(code) != length and value < limit:
+            result.setdefault(value.to_bytes(length, "big"), text)
+    return result
+
+
 def _analyze_type0(doc: fitz.Document, xref: int, base: str, verify: bool = True) -> EmbeddedFont | None:
     encoding = pdfobj.read_name(doc, xref, "Encoding")
     if encoding not in ("Identity-H", "Identity-V"):
-        return None
-    mapping, _ = _tounicode(doc, xref)
+        return _predefined_type0(doc, xref, base, encoding)
+    mapping, _ = read_tounicode(doc, xref)
     descendant = pdfobj.first_array_ref(doc, xref, "DescendantFonts")
     widths: dict[bytes, float] = {}
     default_width = 1000.0
@@ -98,10 +175,13 @@ def _analyze_type0(doc: fitz.Document, xref: int, base: str, verify: bool = True
     if descendant is not None:
         dw = pdfobj.read_number_array(doc, descendant, "DW")
         default_width = dw[0] if dw else 1000.0
-        widths = _parse_cid_widths(doc, descendant)
+        widths = parse_cid_widths(doc, descendant)
         embedded = _has_font_file(doc, descendant)
-    reverse = _invert({k: v for k, v in mapping.items() if len(k) == 2})
-    if embedded and verify:
+    reverse = _invert(_with_code_length(mapping, 2))
+    if verify and encoding == "Identity-V":
+        # Vertical text would be written with a horizontal layout: never re-use it.
+        reverse = {}
+    if embedded and verify and reverse:
         reverse = fontcheck.filter_type0(doc, xref, descendant, reverse)
     font = EmbeddedFont(
         xref=xref,
@@ -112,38 +192,78 @@ def _analyze_type0(doc: fitz.Document, xref: int, base: str, verify: bool = True
         widths=widths,
         default_width=default_width,
         embedded=embedded,
+        forward=_with_code_length(mapping, 2),
     )
     return font
 
 
-def _parse_cid_widths(doc: fitz.Document, xref: int) -> dict[bytes, float]:
+# Predefined CMaps whose codes are all 2 bytes (UCS-2 / UTF-16 for the BMP).
+_TWO_BYTE_CMAP = re.compile(r"^Uni[A-Za-z]+-(?:UCS2|UTF16)(?:-HW)?-[HV]$")
+
+
+def _predefined_type0(doc: fitz.Document, xref: int, base: str, encoding: str) -> EmbeddedFont | None:
+    """A Type0 font with a predefined 2-byte CMap such as UniGB-UCS2-H.
+
+    Without the Adobe CMap files the code -> CID mapping (and so the /W widths
+    and glyph presence) is unknown: the font is never written with, but its code
+    length and default width keep the positions of later text on the line right.
+    Other predefined CMaps (mixed 1/2-byte codes such as 90ms-RKSJ-H) give None.
+    """
+    if not _TWO_BYTE_CMAP.match(encoding):
+        return None
+    descendant = pdfobj.first_array_ref(doc, xref, "DescendantFonts")
+    dw = pdfobj.read_number_array(doc, descendant, "DW") if descendant is not None else []
+    return EmbeddedFont(xref=xref, base_name=base, subtype="Type0", code_bytes=2,
+                        default_width=dw[0] if dw else 1000.0,
+                        embedded=descendant is not None and _has_font_file(doc, descendant))
+
+
+_W_TOKEN = re.compile(r"(\d+)\s+\d+\s+R|\[|\]|[-+]?\d*\.?\d+")
+_MAX_CID = 0xFFFF
+
+
+def _w_tokens(doc: fitz.Document, text: str, depth: int = 0) -> list[str]:
+    """Tokens of a /W array with indirect elements (any generation) dereferenced."""
+    tokens: list[str] = []
+    for match in _W_TOKEN.finditer(text):
+        if match.group(1) is None:
+            tokens.append(match.group(0))
+        elif depth < 2:
+            tokens.extend(_w_tokens(doc, doc.xref_object(int(match.group(1)), compressed=True), depth + 1))
+    return tokens
+
+
+def parse_cid_widths(doc: fitz.Document, xref: int) -> dict[bytes, float]:
+    """CID -> width from a CIDFont's /W (ISO 32000-1 9.7.4.3); CIDs above 0xFFFF are ignored."""
     kind, value, _ = pdfobj.resolve(doc, xref, "W")
     if kind == "null":
         return {}
-    tokens = re.findall(r"\[|\]|-?\d*\.?\d+", re.sub(r"\d+\s+0\s+R", " ", value))
+    tokens = _w_tokens(doc, value)
+    if tokens and tokens[0] == "[":
+        tokens = tokens[1:-1] if tokens[-1] == "]" else tokens[1:]
     widths: dict[bytes, float] = {}
-    pos = 1 if tokens and tokens[0] == "[" else 0
     numbers: list[float] = []
+    pos = 0
     while pos < len(tokens):
         token = tokens[pos]
+        pos += 1
         if token == "[":
-            pos += 1
             start = int(numbers.pop()) if numbers else 0
+            numbers = []
             index = 0
             while pos < len(tokens) and tokens[pos] != "]":
-                widths[(start + index).to_bytes(2, "big")] = float(tokens[pos])
+                if tokens[pos] != "[" and 0 <= start + index <= _MAX_CID:
+                    widths[(start + index).to_bytes(2, "big")] = float(tokens[pos])
                 index += 1
                 pos += 1
-        elif token == "]":
-            pass
-        else:
+            pos += 1
+        elif token != "]":
             numbers.append(float(token))
             if len(numbers) == 3:
-                first, last, width = int(numbers[0]), int(numbers[1]), numbers[2]
-                for cid in range(first, min(last, first + 0xFFFF) + 1):
+                first, last, width = max(int(numbers[0]), 0), min(int(numbers[1]), _MAX_CID), numbers[2]
+                for cid in range(first, last + 1):
                     widths[cid.to_bytes(2, "big")] = width
                 numbers = []
-        pos += 1
     return widths
 
 
@@ -162,18 +282,15 @@ def _analyze_simple(doc: fitz.Document, xref: int, base: str, subtype: str, veri
     widths_list = pdfobj.read_number_array(doc, xref, "Widths")
     start = int(first_char[0]) if first_char else 0
     widths = {bytes([start + i]): w for i, w in enumerate(widths_list) if 0 <= start + i < 256}
-    # ToUnicode is authoritative: in subset fonts it lists exactly the glyphs present.
-    # Without it we fall back to the encoding, keeping only codes with a real width
-    # so we never emit a code whose glyph was stripped by the subsetter.
-    mapping, _ = _tounicode(doc, xref)
-    if not mapping:
-        mapping = _simple_encoding(doc, xref)
-        if widths:
-            mapping = {code: ch for code, ch in mapping.items() if widths.get(code, 0) > 0 or ch == " "}
-    reverse = _invert({k: v for k, v in mapping.items() if len(k) == 1})
     embedded = subtype == "Type3" or _has_font_file(doc, xref)
-    if embedded and verify and subtype == "TrueType":
-        reverse = fontcheck.filter_simple_truetype(doc, xref, reverse)
+    # The program is needed to verify glyphs, or for its built-in encoding.
+    needs_program = verify or pdfobj.get_key(doc, xref, "ToUnicode")[0] == "null"
+    program = fontprog.load(doc, xref) if embedded and needs_program and subtype != "Type3" else None
+    try:
+        reverse, forward = _simple_reverse(doc, xref, base, subtype, widths, program, verify)
+    finally:
+        if program is not None:
+            program.close()
     scale = 1.0
     if subtype == "Type3":
         matrix = pdfobj.read_number_array(doc, xref, "FontMatrix")
@@ -185,27 +302,76 @@ def _analyze_simple(doc: fitz.Document, xref: int, base: str, subtype: str, veri
         code_bytes=1,
         reverse=reverse,
         widths=widths,
-        default_width=_standard_default_width(base) if not widths else 0.0,
+        default_width=_missing_width(doc, xref, base, widths),
         width_scale=scale,
         embedded=embedded,
+        forward=forward,
     )
     if not widths:
         _fill_standard_widths(font)
     return font
 
 
-def _simple_encoding(doc: fitz.Document, xref: int) -> dict[bytes, str]:
+def _missing_width(doc: fitz.Document, xref: int, base: str, widths: dict[bytes, float]) -> float:
+    """Width of codes outside FirstChar..LastChar: the descriptor's /MissingWidth."""
+    descriptor = pdfobj.ref_xref(pdfobj.get_key(doc, xref, "FontDescriptor")[1])
+    missing = pdfobj.read_number_array(doc, descriptor, "MissingWidth") if descriptor is not None else []
+    if missing:
+        return missing[0]
+    return _standard_default_width(base) if not widths else 0.0
+
+
+def _simple_reverse(doc: fitz.Document, xref: int, base: str, subtype: str, widths: dict[bytes, float],
+                    program: fontprog.FontProgram | None, verify: bool) -> dict[str, bytes]:
+    # ToUnicode is authoritative: in subset fonts it lists exactly the glyphs present.
+    # Without it we fall back to the encoding, keeping only codes with a real width
+    # so we never emit a code whose glyph was stripped by the subsetter.
+    mapping, _ = read_tounicode(doc, xref)
+    glyph_names: encodings.GlyphTable | None = None
+    if not mapping:
+        glyph_names = _encoding_glyphs(doc, xref, base, program)
+        mapping = cmap.glyph_table_to_map(glyph_names)
+        if widths:
+            mapping = {code: ch for code, ch in mapping.items() if widths.get(code, 0) > 0 or ch == " "}
+    forward = _with_code_length(mapping, 1)
+    reverse = _invert(forward)
+    if program is not None and verify:
+        if glyph_names is None:
+            glyph_names = _encoding_glyphs(doc, xref, base, program)
+        reverse = fontcheck.filter_simple(program, reverse, glyph_names, fontcheck.is_symbolic(doc, xref))
+    return reverse, forward
+
+
+def _encoding_glyphs(doc: fitz.Document, xref: int, base: str,
+                     program: fontprog.FontProgram | None) -> encodings.GlyphTable:
+    """Code -> glyph name of a simple font (ISO 32000-1 9.6.6: base encoding + /Differences)."""
     kind, value = pdfobj.get_key(doc, xref, "Encoding")
     if kind == "name":
-        return cmap.simple_encoding_map(value.lstrip("/"), None)
+        return encodings.base_glyph_table(value.lstrip("/"))
     if kind in ("dict", "xref"):
         target = pdfobj.ref_xref(value) if kind == "xref" else xref
+        if target is None:
+            return {}
         prefix = "" if kind == "xref" else "Encoding/"
-        base = pdfobj.read_name(doc, target, f"{prefix}BaseEncoding") or "StandardEncoding"
+        base_name = pdfobj.read_name(doc, target, f"{prefix}BaseEncoding")
+        table = encodings.base_glyph_table(base_name) if base_name else _builtin_glyphs(base, program)
         diff_kind, diff_value, _ = pdfobj.resolve(doc, target, f"{prefix}Differences")
-        differences = diff_value if diff_kind != "null" else None
-        return cmap.simple_encoding_map(base, differences)
-    return cmap.simple_encoding_map("StandardEncoding", None)
+        return cmap.simple_glyph_names(table, diff_value if diff_kind != "null" else None)
+    return _builtin_glyphs(base, program)
+
+
+def _builtin_glyphs(base: str, program: fontprog.FontProgram | None) -> encodings.GlyphTable:
+    """The font's built-in encoding: the program's own, else StandardEncoding.
+
+    Symbol and ZapfDingbats have private built-in encodings we do not decode:
+    an empty table makes the editor use a substitute instead of wrong glyphs.
+    """
+    if program is not None:
+        return program.builtin_encoding() or {}
+    lowered = clean_font_name(base).lower()
+    if lowered.startswith(("symbol", "zapfdingbats", "dingbats", "wingdings", "webdings")):
+        return {}
+    return encodings.base_glyph_table("StandardEncoding")
 
 
 _BASE14_PREFIX = {"courier": "co", "helvetica": "he", "arial": "he", "times": "ti"}
@@ -242,13 +408,13 @@ def tag_font(doc: fitz.Document, xref: int, font_id: str) -> None:
     doc.xref_set_key(xref, TAG_KEY, fitz.get_pdf_str(font_id))
 
 
+def _has_tag(doc: fitz.Document, xref: int, font_id: str) -> bool:
+    kind, value = pdfobj.get_key(doc, xref, TAG_KEY)
+    # PyMuPDF returns PDF strings without their parentheses.
+    return kind == "string" and value == font_id
+
+
 def find_tagged_font(doc: fitz.Document, font_id: str, hint: int | None = None) -> int | None:
-    wanted = fitz.get_pdf_str(font_id)
-    if hint and 0 < hint < doc.xref_length():
-        if pdfobj.get_key(doc, hint, TAG_KEY)[1] == wanted:
-            return hint
-    for xref in range(1, doc.xref_length()):
-        kind, value = pdfobj.get_key(doc, xref, TAG_KEY)
-        if kind != "null" and value == wanted:
-            return xref
-    return None
+    if hint and 0 < hint < doc.xref_length() and _has_tag(doc, hint, font_id):
+        return hint
+    return next((xref for xref in range(1, doc.xref_length()) if _has_tag(doc, xref, font_id)), None)

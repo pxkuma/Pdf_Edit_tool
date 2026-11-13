@@ -296,6 +296,16 @@
 .handle.s { left: 50%; top: 100%; cursor: ns-resize; }
 .handle.sw { left: 0; top: 100%; cursor: nesw-resize; }
 .handle.w { left: 0; top: 50%; cursor: ew-resize; }
+.handle.rotate { left: 50%; top: -16px; cursor: grab; border-radius: 50%; }
+.handle.rotate::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 100%;
+  width: 1px;
+  height: 9px;
+  background: var(--accent);
+}
 
 .drag-rect {
   position: absolute;

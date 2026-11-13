@@ -1,6 +1,10 @@
 import { create } from "zustand";
-import { ApiError } from "../api/client";
-import type { DocInfo, MutationResponse, Rect, SearchHit, Span } from "../api/types";
+import { ApiError, api } from "../api/client";
+import type { DocInfo, FieldProposal, MutationResponse, Rect, SearchHit, Span } from "../api/types";
+import { MAX_AUTHOR, readCommentAuthor, writeCommentAuthor } from "../lib/commentAuthor";
+import { toggled } from "../lib/formFields";
+import { serialized } from "../lib/serialQueue";
+import { needsSignedEditConsent, signedEditKey } from "../lib/signatures";
 
 export type Tool =
   | "select"
@@ -24,16 +28,36 @@ export type Tool =
   | "eraseText"
   | "crop"
   | "fieldText"
-  | "fieldCheckbox";
+  | "fieldCheckbox"
+  | "fieldRadio"
+  | "fieldCombobox"
+  | "fieldListbox"
+  | "fieldButton"
+  | "fieldSignature" // an empty signature field to sign later
+  | "editFields" // select, move, resize and configure the form's fields
+  | "signField"; // draw the box of a visible digital signature
 
 export type Selection =
   | { kind: "annotation"; page: number; xref: number }
-  | { kind: "image"; page: number; xref: number; bbox?: Rect } // bbox: this placement of the image
+  | { kind: "image"; page: number; xref: number; bbox?: Rect; rect?: Rect; angle?: number; opacity?: number } // bbox: this placement's footprint
   | { kind: "graphic"; page: number; xref: number; bbox: Rect } // vector graphics (lines, boxes, rules)
   | { kind: "field"; page: number; xref: number }
   | null;
 
-export type SidebarPanel = "thumbnails" | "outline" | "search" | "forms" | "history" | "fonts" | null;
+export type SidebarPanel = "thumbnails" | "outline" | "search" | "forms" | "history" | "fonts" | "comments" | null;
+
+/** Fields recognised on the pages, waiting for the user to accept or reject them. */
+export interface DetectedFields {
+  proposals: FieldProposal[];
+  rejected: ReadonlySet<string>; // ids the user turned off
+}
+
+/** The comment the Comments panel last pointed at; its annotation is highlighted on the page. */
+export interface ActiveComment {
+  page: number;
+  xref: number;
+  nonce: number; // changes every time, so choosing the same comment again flashes it again
+}
 
 export type DialogName =
   | "export"
@@ -47,6 +71,7 @@ export type DialogName =
   | "protect"
   | "redactSearch"
   | "ocr"
+  | "digitalSign"
   | null;
 
 export interface NewTextStyle {
@@ -154,6 +179,17 @@ export interface Placement {
   label: string;
 }
 
+/** Where a visible digital signature goes (display space, points). */
+export interface SignTarget {
+  page: number;
+  rect: Rect;
+}
+
+export interface RunOptions {
+  /** The action may run on a signed document without asking (signing again, reverting). */
+  allowSigned?: boolean;
+}
+
 export interface Toast {
   id: number;
   kind: "info" | "success" | "error" | "warning";
@@ -169,6 +205,7 @@ interface EditorState {
   selectedPages: number[];
   currentPage: number;
   busy: number;
+  heldTool: Tool | null; // the tool to give back when a temporarily held one (Space = pan) is released
   sidebar: SidebarPanel;
   propertiesOpen: boolean;
   dialog: DialogName;
@@ -177,6 +214,7 @@ interface EditorState {
   ink: DrawStyle;
   shape: DrawStyle;
   redactColor: string;
+  redactSanitize: boolean;
   activeEdit: ActiveEdit | null;
   placement: Placement | null;
   searchHits: SearchHit[];
@@ -184,12 +222,22 @@ interface EditorState {
   toasts: Toast[];
   scrollRequest: { page: number; y?: number; nonce: number } | null;
   textPreset: string | null;
+  signTarget: SignTarget | null;
+  signaturePanelOpen: boolean;
+  signedEditConsent: string | null; // signedEditKey() the user agreed to edit despite its signatures
+  signedEditPrompt: boolean; // the "editing invalidates signatures" question is showing
+  commentAuthor: string; // signs new comments, replies and review statuses
+  activeComment: ActiveComment | null;
+  detected: DetectedFields | null;
+  radioGroup: string | null; // new radio buttons join this group (set by "Add button to group")
 }
 
 interface EditorActions {
   setDoc: (doc: DocInfo | null) => void;
   setZoom: (zoom: number, fit?: "width" | "page" | null) => void;
   setTool: (tool: Tool) => void;
+  holdTool: (tool: Tool) => void;
+  releaseTool: () => void;
   select: (selection: Selection) => void;
   setSelectedPages: (pages: number[]) => void;
   setCurrentPage: (page: number) => void;
@@ -201,6 +249,7 @@ interface EditorActions {
   patchInk: (patch: Partial<DrawStyle>) => void;
   patchShape: (patch: Partial<DrawStyle>) => void;
   setRedactColor: (color: string) => void;
+  setRedactSanitize: (sanitize: boolean) => void;
   setActiveEdit: (edit: ActiveEdit | null) => void;
   patchDraft: (patch: Partial<SpanDraft>) => void;
   patchEdit: (patch: Partial<ActiveEdit>) => void;
@@ -211,8 +260,20 @@ interface EditorActions {
   dismissToast: (id: number) => void;
   scrollTo: (page: number, y?: number) => void;
   setTextPreset: (text: string | null) => void;
-  run: <T>(fn: () => Promise<MutationResponse<T>>, success?: string) => Promise<T | undefined>;
+  run: <T>(fn: () => Promise<MutationResponse<T>>, success?: string, options?: RunOptions) => Promise<T | undefined>;
+  setSignTarget: (target: SignTarget | null) => void;
+  setSignaturePanel: (open: boolean) => void;
+  /** Resolves true when the document may be edited: unsigned, or the user confirmed. */
+  confirmSignedEdit: () => Promise<boolean>;
+  answerSignedEdit: (allow: boolean) => void;
+  setCommentAuthor: (name: string) => void;
+  focusComment: (page: number, xref: number, y?: number) => void;
+  clearActiveComment: () => void;
+  setDetected: (proposals: FieldProposal[] | null) => void;
+  toggleProposal: (id: string) => void;
+  setRadioGroup: (name: string | null) => void;
   track: <T>(fn: () => Promise<T>) => Promise<T | undefined>;
+  moveInHistory: (target: "undo" | "redo" | number) => Promise<void>;
 }
 
 const STYLE_KEY = "pdfstudio.styles";
@@ -251,10 +312,12 @@ const defaultStyles = {
   ink: { color: "#e11d48", fill: null, width: 2, opacity: 1, dashed: false } as DrawStyle,
   shape: { color: "#2563eb", fill: null, width: 2, opacity: 1, dashed: false } as DrawStyle,
   redactColor: "#000000",
+  redactSanitize: false,
 };
 
 const savedStyles = readStorage(STYLE_KEY, defaultStyles);
 let toastId = 0;
+let signedEditWaiters: ((allow: boolean) => void)[] = [];
 
 export function errorMessage(error: unknown): string {
   if (error instanceof ApiError) return error.message;
@@ -264,8 +327,8 @@ export function errorMessage(error: unknown): string {
 
 export const useEditor = create<EditorState & EditorActions>((set, get) => {
   const persistStyles = () => {
-    const { newText, markup, ink, shape, redactColor } = get();
-    writeStorage(STYLE_KEY, { newText, markup, ink, shape, redactColor });
+    const { newText, markup, ink, shape, redactColor, redactSanitize } = get();
+    writeStorage(STYLE_KEY, { newText, markup, ink, shape, redactColor, redactSanitize });
   };
 
   return {
@@ -277,6 +340,7 @@ export const useEditor = create<EditorState & EditorActions>((set, get) => {
     selectedPages: [],
     currentPage: 0,
     busy: 0,
+    heldTool: null,
     sidebar: "thumbnails",
     propertiesOpen: true,
     dialog: null,
@@ -285,6 +349,7 @@ export const useEditor = create<EditorState & EditorActions>((set, get) => {
     ink: savedStyles.ink,
     shape: savedStyles.shape,
     redactColor: savedStyles.redactColor,
+    redactSanitize: savedStyles.redactSanitize === true,
     activeEdit: null,
     placement: null,
     searchHits: [],
@@ -292,6 +357,14 @@ export const useEditor = create<EditorState & EditorActions>((set, get) => {
     toasts: [],
     scrollRequest: null,
     textPreset: null,
+    signTarget: null,
+    signaturePanelOpen: false,
+    signedEditConsent: null,
+    signedEditPrompt: false,
+    commentAuthor: readCommentAuthor(),
+    activeComment: null,
+    detected: null,
+    radioGroup: null,
 
     setDoc: (doc) =>
       set((state) => {
@@ -303,6 +376,12 @@ export const useEditor = create<EditorState & EditorActions>((set, get) => {
           selectedPages: state.selectedPages.filter((p) => p < count),
           currentPage: Math.min(state.currentPage, Math.max(0, count - 1)),
           activeEdit: sameDoc ? state.activeEdit : null,
+          signTarget: sameDoc ? state.signTarget : null,
+          signaturePanelOpen: sameDoc ? state.signaturePanelOpen : false,
+          activeComment: sameDoc ? state.activeComment : null,
+          // Proposals describe one version of the pages: any change (or another document) discards them.
+          detected: sameDoc && state.doc?.version === doc?.version ? state.detected : null,
+          radioGroup: sameDoc ? state.radioGroup : null,
         };
       }),
     setZoom: (zoom, fit = null) => set({ zoom: Math.min(6, Math.max(0.1, zoom)), fit }),
@@ -314,6 +393,9 @@ export const useEditor = create<EditorState & EditorActions>((set, get) => {
         textPreset: tool === "addText" ? state.textPreset : null,
         placement: tool === "image" ? state.placement : null,
       })),
+    holdTool: (tool) =>
+      set((state) => (state.heldTool ? {} : { heldTool: state.tool, tool })), // unlike setTool: selection and open editor stay
+    releaseTool: () => set((state) => (state.heldTool ? { tool: state.heldTool, heldTool: null } : {})),
     select: (selection) => set({ selection }),
     setSelectedPages: (pages) => set({ selectedPages: pages }),
     setCurrentPage: (page) => set({ currentPage: page }),
@@ -340,6 +422,10 @@ export const useEditor = create<EditorState & EditorActions>((set, get) => {
       set({ redactColor: color });
       persistStyles();
     },
+    setRedactSanitize: (sanitize) => {
+      set({ redactSanitize: sanitize });
+      persistStyles();
+    },
     setActiveEdit: (edit) => set({ activeEdit: edit }),
     patchDraft: (patch) =>
       set((state) =>
@@ -361,17 +447,70 @@ export const useEditor = create<EditorState & EditorActions>((set, get) => {
     dismissToast: (id) => set((state) => ({ toasts: state.toasts.filter((t) => t.id !== id) })),
     scrollTo: (page, y) => set({ scrollRequest: { page, y, nonce: Date.now() } }),
     setTextPreset: (text) => set({ textPreset: text }),
+    setCommentAuthor: (name) => {
+      const clean = name.slice(0, MAX_AUTHOR);
+      set({ commentAuthor: clean });
+      writeCommentAuthor(clean);
+    },
+    focusComment: (page, xref, y) => {
+      set({ activeComment: { page, xref, nonce: Date.now() } });
+      get().scrollTo(page, y);
+    },
+    clearActiveComment: () => set({ activeComment: null }),
+    setDetected: (proposals) => set({ detected: proposals ? { proposals, rejected: new Set<string>() } : null }),
+    toggleProposal: (id) =>
+      set((state) => (state.detected ? { detected: { ...state.detected, rejected: toggled(state.detected.rejected, id) } } : {})),
+    setRadioGroup: (name) => set({ radioGroup: name }),
 
-    run: async (fn, success) => {
+    setSignTarget: (target) => set({ signTarget: target }),
+    setSignaturePanel: (open) => set({ signaturePanelOpen: open }),
+    confirmSignedEdit: () => {
+      const { doc, signedEditConsent } = get();
+      if (!needsSignedEditConsent(doc, signedEditConsent)) return Promise.resolve(true);
+      return new Promise<boolean>((resolve) => {
+        signedEditWaiters = [...signedEditWaiters, resolve]; // several edits waiting share one question
+        set({ signedEditPrompt: true });
+      });
+    },
+    answerSignedEdit: (allow) => {
+      const waiters = signedEditWaiters;
+      signedEditWaiters = [];
+      set((state) => ({ signedEditPrompt: false, signedEditConsent: allow ? signedEditKey(state.doc) : state.signedEditConsent }));
+      waiters.forEach((resolve) => resolve(allow));
+    },
+
+    run: async (fn, success, options) => {
+      // Only await when there is a question to ask: an extra tick would let a later action (undo) overtake this one.
+      const { doc, signedEditConsent } = get();
+      if (!options?.allowSigned && needsSignedEditConsent(doc, signedEditConsent) && !(await get().confirmSignedEdit())) return undefined;
       set((state) => ({ busy: state.busy + 1 }));
       try {
-        const response = await fn();
-        get().setDoc(response.document);
+        // The document is replaced inside the queue, so the next action starts from what this one produced.
+        const response = await serialized(async () => {
+          const result = await fn();
+          get().setDoc(result.document);
+          return result;
+        });
         if (success) get().toast(success, "success");
         return response.result;
       } catch (error) {
         get().toast(errorMessage(error), "error");
         return undefined;
+      } finally {
+        set((state) => ({ busy: Math.max(0, state.busy - 1) }));
+      }
+    },
+    moveInHistory: async (target) => {
+      set((state) => ({ busy: state.busy + 1 }));
+      try {
+        await serialized(async () => {
+          const { doc } = get(); // read when it is this action's turn, not when it was requested
+          if (!doc || (target === "undo" && !doc.canUndo) || (target === "redo" && !doc.canRedo)) return;
+          const info = target === "undo" ? await api.undo(doc.id) : target === "redo" ? await api.redo(doc.id) : await api.jump(doc.id, target);
+          get().setDoc(info);
+        });
+      } catch (error) {
+        get().toast(errorMessage(error), "error");
       } finally {
         set((state) => ({ busy: Math.max(0, state.busy - 1) }));
       }

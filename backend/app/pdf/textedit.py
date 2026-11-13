@@ -7,14 +7,15 @@ from dataclasses import dataclass, field, replace
 
 import pymupdf as fitz
 
-from . import decor, extract, fontres, ocr, pdfobj, push, textstate
-from .fonts import FontCatalog, FontFace, style_from_name
+from . import decor, extract, fontres, ocr, pdfobj, push, scanpatch, textstate
+from .fonts import FontCatalog, FontFace, font_name_rank, style_from_name
 from .geometry import (
     from_display_point,
     from_display_vector,
     hex_to_rgb,
     shrink_for_redaction,
 )
+from .redaction import redact_areas
 from .textwriter import FontChain, Glyph, PlacedLine, TextStyle, line_width, write_lines
 
 
@@ -92,28 +93,28 @@ class EditReport:
 
 
 # --------------------------------------------------------------- font logic
-def _page_font_candidates(doc: fitz.Document, page: fitz.Page, span_font: str) -> list[fontres.EmbeddedFont]:
-    wanted = fontres.normalize_font_name(span_font)
+def _page_font_candidates(doc: fitz.Document, page: fitz.Page,
+                          span_font: str) -> list[tuple[int, fontres.EmbeddedFont]]:
+    """(name rank, font) of the page fonts that are the span's face (see ``font_name_rank``)."""
     results = []
     seen: set[int] = set()
     for xref, _ext, _type, basefont, _name, _enc, *_ in page.get_fonts(full=True):
         if xref <= 0 or xref in seen:
             continue
-        name = fontres.normalize_font_name(basefont)
-        if name == wanted or (wanted and (name.startswith(wanted) or wanted.startswith(name))):
+        rank = font_name_rank(span_font, basefont)
+        if rank is not None:
             seen.add(xref)
             analysed = fontres.analyze_font(doc, xref)
             if analysed is not None:
-                results.append(analysed)
+                results.append((rank, analysed))
     return results
 
 
 def resolve_span_font(doc: fitz.Document, page: fitz.Page, span: dict) -> fontres.EmbeddedFont | None:
-    candidates = _page_font_candidates(doc, page, span["font"])
-    if not candidates:
-        return None
-    best = max(candidates, key=lambda font: font.coverage(span["text"]))
-    return best if best.coverage(span["text"]) >= 0.6 else None
+    """The page font that drew the span: the closest name first, then the best coverage."""
+    scored = [(rank, font, font.coverage(span["text"])) for rank, font in _page_font_candidates(doc, page, span["font"])]
+    usable = [item for item in scored if item[2] >= 0.6]
+    return min(usable, key=lambda item: (item[0], -item[2]))[1] if usable else None
 
 
 def _record_font(doc: fitz.Document, span: dict) -> fontres.EmbeddedFont | None:
@@ -178,6 +179,9 @@ def plan_fonts(
             base = {**base, **dict(zip(("bold", "italic"), style_from_name(font_name)))}
     elif span is not None:
         embedded = _record_font(doc, span) or resolve_span_font(doc, page, span)
+        record = span.get("record")
+        if embedded is not None and record is not None and record.font_xref == embedded.xref:
+            embedded = embedded.preferring(record.codes)  # keep old-style figures, small caps...
 
     substitute = catalog.substitute(font_name, bold, italic, base["serif"], base["mono"])
     drop_bold, drop_italic = fake_bold and not bold, fake_italic and not italic
@@ -294,26 +298,6 @@ def _report(chain: FontChain) -> EditReport:
                 names.append(f"{face.family} {face.style}")
                 exact = False if chain.embedded is not None else exact
     return EditReport(names, sorted(chain.missing), exact and not chain.missing)
-
-
-# --------------------------------------------------------------- redaction
-def redact_areas(page: fitz.Page, rects: list[fitz.Rect], fill: tuple | bool = False,
-                 images: int = fitz.PDF_REDACT_IMAGE_NONE,
-                 graphics: int = fitz.PDF_REDACT_LINE_ART_NONE,
-                 text: int = fitz.PDF_REDACT_TEXT_REMOVE) -> None:
-    """Apply redactions for ``rects`` without applying pre-existing redact annots."""
-    pending = []
-    for annot in list(page.annots(types=[fitz.PDF_ANNOT_REDACT]) or []):
-        pending.append((fitz.Rect(annot.rect), annot.info))
-        page.delete_annot(annot)
-    for rect in rects:
-        if not rect.is_empty:
-            page.add_redact_annot(rect, fill=fill)
-    page.apply_redactions(images=images, graphics=graphics, text=text)
-    for rect, info in pending:
-        restored = page.add_redact_annot(rect)
-        restored.set_info(info)
-        restored.update()
 
 
 def _auto_char_spacing(span: dict, chain: FontChain, style: TextStyle) -> float:
@@ -513,14 +497,55 @@ def _replace_scanned(doc: fitz.Document, page: fitz.Page, catalog: FontCatalog, 
         if natural > 0:
             style = replace(style, hscale=max(30.0, min(300.0, style.hscale * rect.width / natural)))
     cover = rect + (-0.6, -0.6, 0.6, 0.6)
-    redact_areas(page, [cover], fill=background, images=fitz.PDF_REDACT_IMAGE_PIXELS)
     origin = (span["origin"][0], span["origin"][1])
     if edit.dx or edit.dy:
         move = _display_delta(page, edit.dx, edit.dy)
         origin = (origin[0] + move[0], origin[1] + move[1])
+    if _write_scan_patch(doc, page, catalog, edit, cover, origin, direction, style, replace(request, font=font), background):
+        return _report(plan.chain)
+    redact_areas(page, [cover], fill=background, images=fitz.PDF_REDACT_IMAGE_PIXELS)
     if edit.text.strip():
         write_lines(doc, page, [PlacedLine(origin, direction, glyphs)], style, plan.chain)
     return _report(plan.chain)
+
+
+def _write_scan_patch(doc: fitz.Document, page: fitz.Page, catalog: FontCatalog, edit: SpanEdit,
+                      cover: fitz.Rect, origin: tuple[float, float], direction: tuple[float, float],
+                      style: TextStyle, request: StyleRequest, background: tuple[float, float, float]) -> bool:
+    """Replace a scanned word so the result still looks scanned.
+
+    The paper is inpainted from the surrounding texture, the new text is rasterised and
+    degraded to the scan's blur/noise/ink, and the real text goes underneath invisibly.
+    Returns False when this page cannot take a patch (rotated page, patch too large,
+    Pillow missing); the caller then uses the flat-cover fallback.
+    """
+    if page.rotation or abs(direction[1]) > 0.05:
+        return False
+    try:
+        clip = scanpatch.patch_clip(page, cover)
+
+        def draw(scratch: fitz.Document, scratch_page: fitz.Page) -> None:
+            if not edit.text.strip():
+                return
+            scratch_plan = plan_fonts(scratch, scratch_page, catalog, request, None)
+            scratch_glyphs = scratch_plan.chain.encode(edit.text)
+            shifted = (origin[0] - clip.x0, origin[1] - clip.y0)
+            raster_style = replace(style, color=(0.0, 0.0, 0.0), opacity=1.0, render_mode=0)
+            write_lines(scratch, scratch_page, [PlacedLine(shifted, direction, scratch_glyphs)],
+                        raster_style, scratch_plan.chain)
+
+        patch, clip = scanpatch.build_patch(page, cover, background, style.color, draw)
+    except scanpatch.ScanPatchError:
+        return False
+    # Remove the old pixels and the OCR word under them, then lay the patch over the area.
+    redact_areas(page, [cover], fill=background, images=fitz.PDF_REDACT_IMAGE_PIXELS)
+    page.insert_image(clip, stream=patch, keep_proportion=False)
+    if edit.text.strip():
+        hidden_plan = plan_fonts(doc, page, catalog, request, None)
+        hidden_glyphs = hidden_plan.chain.encode(edit.text)
+        write_lines(doc, page, [PlacedLine(origin, direction, hidden_glyphs)],
+                    replace(style, render_mode=3), hidden_plan.chain)
+    return True
 
 
 def _display_delta(page: fitz.Page, dx: float, dy: float) -> tuple[float, float]:
@@ -575,7 +600,8 @@ def _layout(
         extra = 0.0
         if align == "justify" and max_width and not paragraph_end and width < max_width:
             spaces = sum(1 for g in glyphs if g.char == " ")
-            extra = (max_width - width) / spaces if spaces else 0.0
+            # ``width`` is already scaled by Tz, and so is the extra space (line_width, TJ).
+            extra = (max_width - width) / spaces / (style.hscale / 100.0) if spaces else 0.0
         shift = _align_offset(width, max_width, align)
         origin = (
             first_origin[0] + down[0] * step * index + direction[0] * shift,

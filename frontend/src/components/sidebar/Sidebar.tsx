@@ -1,5 +1,6 @@
 import { X } from "lucide-react";
 import { useEditor, type SidebarPanel } from "../../store/editor";
+import { CommentsPanel } from "./CommentsPanel";
 import { FontsPanel } from "./FontsPanel";
 import { FormsPanel } from "./FormsPanel";
 import { HistoryPanel } from "./HistoryPanel";
@@ -14,6 +15,7 @@ const TITLES: Record<Exclude<SidebarPanel, null>, string> = {
   forms: "Form fields",
   history: "History",
   fonts: "Document fonts",
+  comments: "Comments",
 };
 
 export function Sidebar() {
@@ -21,7 +23,7 @@ export function Sidebar() {
   const setSidebar = useEditor((s) => s.setSidebar);
   if (!panel) return null;
   return (
-    <aside className="sidebar" aria-label={TITLES[panel]}>
+    <aside className={`sidebar${panel === "comments" ? " wide" : ""}`} aria-label={TITLES[panel]}>
       <div className="panel-head">
         <h3>{TITLES[panel]}</h3>
         <button className="icon-btn small" onClick={() => setSidebar(panel)} aria-label="Close panel">
@@ -35,6 +37,7 @@ export function Sidebar() {
         {panel === "forms" && <FormsPanel />}
         {panel === "history" && <HistoryPanel />}
         {panel === "fonts" && <FontsPanel />}
+        {panel === "comments" && <CommentsPanel />}
       </div>
     </aside>
   );

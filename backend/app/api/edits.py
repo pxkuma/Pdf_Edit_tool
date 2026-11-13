@@ -1,4 +1,4 @@
-"""Content editing endpoints: text, annotations, images, forms, redaction, stamps."""
+"""Content editing endpoints: text, annotations, images, flattening, redaction, stamps."""
 
 from __future__ import annotations
 
@@ -7,14 +7,14 @@ from dataclasses import asdict
 from fastapi import APIRouter, File, Form, UploadFile
 
 from .. import deps
-from ..pdf import annots, doctools, forms, images, textedit
+from ..pdf import annots, doctools, images, imagestyle, textedit
 from ..pdf.annots import AnnotStyle
 from ..pdf.doctools import StampStyle
 from ..pdf.push import PushItem, PushRequest
 from ..pdf.textedit import BlockEdit, NewText, SpanEdit, StyleRequest
-from ..storage import PDF_LOCK, Mutation
+from ..storage import Mutation
 from . import schemas
-from .common import check_page, mutate, ok, read_upload, single_page
+from .common import amutate, check_page, mutate, ok, read_upload, single_page
 
 router = APIRouter(prefix="/api/documents/{doc_id}")
 
@@ -143,9 +143,30 @@ def move_image(doc_id: str, page: int, xref: int, body: schemas.ImageMoveBody) -
     def run(doc):
         pg = check_page(doc, page)
         images.move_image(doc, pg, xref, body.rect)
-        return Mutation(changed=None)  # other pages may share the image
+        return Mutation(changed=frozenset({page}))  # pages sharing the image object are untouched
 
     return mutate(doc_id, "Moved image", run)
+
+
+@router.post("/images/{page}/{xref}/place")
+def place_image(doc_id: str, page: int, xref: int, body: schemas.ImagePlaceBody) -> dict:
+    def run(doc):
+        pg = check_page(doc, page)
+        imagestyle.place_image(doc, pg, xref, body.rect, body.angle, body.opacity, body.overlay)
+        return Mutation(changed=frozenset({page}))
+
+    return mutate(doc_id, "Transformed image", run)
+
+
+@router.post("/images/{page}/{xref}/adjust")
+def adjust_image(doc_id: str, page: int, xref: int, body: schemas.ImageAdjustBody) -> dict:
+    adjustments = imagestyle.Adjustments(**body.model_dump())
+
+    def run(doc):
+        imagestyle.adjust_image(doc, check_page(doc, page), xref, adjustments)
+        return Mutation(changed=frozenset({page}))
+
+    return mutate(doc_id, "Adjusted image", run)
 
 
 @router.post("/images/{page}/{xref}/replace")
@@ -156,50 +177,19 @@ async def replace_image(doc_id: str, page: int, xref: int, file: UploadFile = Fi
         images.replace_image(check_page(doc, page), xref, data)
         return Mutation(changed=None)
 
-    return mutate(doc_id, "Replaced image", run)
+    return await amutate(doc_id, "Replaced image", run)
 
 
 @router.delete("/images/{page}/{xref}")
 def delete_image(doc_id: str, page: int, xref: int) -> dict:
     def run(doc):
         images.delete_image(check_page(doc, page), xref)
-        return Mutation(changed=None)
+        return Mutation(changed=frozenset({page}))  # pages sharing the image object are untouched
 
     return mutate(doc_id, "Deleted image", run)
 
 
-# ------------------------------------------------------------------ forms
-@router.get("/forms")
-def list_forms(doc_id: str) -> dict:
-    with PDF_LOCK:
-        _state, doc = deps.store().open_current(doc_id)
-        return ok(forms.list_fields(doc))
-
-
-@router.put("/forms")
-def fill_forms(doc_id: str, body: schemas.FormValuesBody) -> dict:
-    def run(doc):
-        changed = forms.set_values(doc, [v.model_dump() for v in body.values])
-        return Mutation(changed=frozenset(changed))
-
-    return mutate(doc_id, "Filled form", run)
-
-
-@router.post("/forms")
-def add_field(doc_id: str, body: schemas.NewFieldBody) -> dict:
-    operation = single_page(body.page, lambda _doc, pg: forms.add_field(pg, body.kind, body.rect, body.name, body.value))
-    return mutate(doc_id, f"Added {body.kind} field", operation)
-
-
-@router.delete("/forms/{page}/{xref}")
-def delete_field(doc_id: str, page: int, xref: int) -> dict:
-    def run(doc):
-        forms.delete_field(doc, page, xref)
-        return Mutation(changed=frozenset({page}))
-
-    return mutate(doc_id, "Deleted form field", run)
-
-
+# ------------------------------------------------------------------ forms (see forms.py)
 @router.post("/flatten")
 def flatten(doc_id: str, body: schemas.FlattenBody) -> dict:
     def run(doc):
@@ -213,14 +203,15 @@ def flatten(doc_id: str, body: schemas.FlattenBody) -> dict:
 @router.post("/redact")
 def redact(doc_id: str, body: schemas.RedactBody) -> dict:
     label = {"redact": "Redacted area", "whiteout": "Whiteout", "text": "Erased text"}[body.mode]
-    operation = single_page(body.page, lambda doc, pg: doctools.redact(doc, pg, list(body.rects), body.mode, body.color))
+    operation = single_page(body.page, lambda doc, pg: doctools.redact(doc, pg, list(body.rects), body.mode, body.color, body.sanitize))
     return mutate(doc_id, label, operation)
 
 
 @router.post("/redact/search")
 def redact_search(doc_id: str, body: schemas.RedactSearchBody) -> dict:
     def run(doc):
-        result = doctools.redact_search(doc, body.query, doctools.resolve_pages(doc, body.pages), body.color)
+        result = doctools.redact_search(doc, body.query, doctools.resolve_pages(doc, body.pages), body.color,
+                                        body.sanitize)
         return Mutation(changed=frozenset(result["pages"]), result=result)
 
     return mutate(doc_id, f"Redacted “{_preview(body.query)}”", run)
@@ -230,8 +221,9 @@ def redact_search(doc_id: str, body: schemas.RedactSearchBody) -> dict:
 def watermark(doc_id: str, body: schemas.WatermarkBody) -> dict:
     def run(doc):
         pages = doctools.resolve_pages(doc, body.pages)
-        doctools.watermark(doc, deps.catalog(), pages, body.text, _stamp_style(body.style), body.angle, body.layout)
-        return Mutation(changed=frozenset(pages))
+        result = doctools.watermark(doc, deps.catalog(), pages, body.text, _stamp_style(body.style), body.angle,
+                                    body.layout)
+        return Mutation(changed=frozenset(pages), result=result)
 
     return mutate(doc_id, "Added watermark", run)
 
@@ -248,7 +240,7 @@ async def image_watermark(doc_id: str, file: UploadFile = File(...), pages: str 
         doctools.image_watermark(doc, targets, data, scale, opacity)
         return Mutation(changed=frozenset(targets))
 
-    return mutate(doc_id, "Added image watermark", run)
+    return await amutate(doc_id, "Added image watermark", run)
 
 
 @router.post("/header-footer")
@@ -257,8 +249,8 @@ def header_footer(doc_id: str, body: schemas.HeaderFooterBody) -> dict:
 
     def run(doc):
         pages = doctools.resolve_pages(doc, body.pages)
-        doctools.header_footer(doc, deps.catalog(), pages, body.template, body.position, body.margin,
-                               _stamp_style(body.style), body.start_number, filename)
-        return Mutation(changed=frozenset(pages))
+        result = doctools.header_footer(doc, deps.catalog(), pages, body.template, body.position, body.margin,
+                                        _stamp_style(body.style), body.start_number, filename)
+        return Mutation(changed=frozenset(pages), result=result)
 
     return mutate(doc_id, "Added header/footer", run)

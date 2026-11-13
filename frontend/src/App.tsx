@@ -7,10 +7,14 @@ import { ExportDialog } from "./components/dialogs/ExportDialog";
 import { InsertPagesDialog, MetadataDialog, ShortcutsDialog } from "./components/dialogs/MiscDialogs";
 import { SignatureDialog, StampDialog } from "./components/dialogs/SignatureDialog";
 import { HeaderFooterDialog, WatermarkDialog } from "./components/dialogs/StampDialogs";
+import { CompareView } from "./components/compare/CompareView";
 import { Rail } from "./components/layout/Rail";
 import { Ribbon, type RibbonTab } from "./components/layout/Ribbon";
 import { TopBar } from "./components/layout/TopBar";
 import { OcrDialog } from "./components/dialogs/OcrDialog";
+import { DigitalSignDialog } from "./components/dialogs/DigitalSignDialog";
+import { SignatureBar } from "./components/signatures/SignatureBar";
+import { SignedEditPrompt } from "./components/signatures/SignedEditPrompt";
 import { PropertiesPanel } from "./components/properties/PropertiesPanel";
 import { Sidebar } from "./components/sidebar/Sidebar";
 import { StartScreen } from "./components/StartScreen";
@@ -19,6 +23,7 @@ import { useShortcuts } from "./hooks/useShortcuts";
 import { flushEdit } from "./lib/editSession";
 import { rememberDoc } from "./lib/files";
 import { useFonts } from "./lib/fonts";
+import { useCompare } from "./store/compare";
 import { errorMessage, useEditor } from "./store/editor";
 
 function docIdFromHash(): string | null {
@@ -49,6 +54,8 @@ function Dialogs() {
       return <ShortcutsDialog />;
     case "ocr":
       return <OcrDialog />;
+    case "digitalSign":
+      return <DigitalSignDialog />;
     default:
       return null;
   }
@@ -59,6 +66,8 @@ export default function App() {
   const setDoc = useEditor((s) => s.setDoc);
   const toast = useEditor((s) => s.toast);
   const loadFonts = useFonts((s) => s.load);
+  const comparing = useCompare((s) => s.phase !== "closed");
+  const compareDocId = useCompare((s) => s.docId);
   const [tab, setTab] = useState<RibbonTab>("edit");
   const [booting, setBooting] = useState(() => docIdFromHash() !== null);
   useShortcuts();
@@ -92,6 +101,11 @@ export default function App() {
       .finally(() => setBooting(false));
   }, [open, toast]);
 
+  // A comparison belongs to the document it was started from.
+  useEffect(() => {
+    if (compareDocId && compareDocId !== doc?.id) void useCompare.getState().close();
+  }, [compareDocId, doc?.id]);
+
   useEffect(() => {
     const onHash = () => {
       if (!docIdFromHash() && useEditor.getState().doc) {
@@ -121,10 +135,20 @@ export default function App() {
     );
   }
 
+  if (comparing) {
+    return (
+      <>
+        <CompareView />
+        <Toasts />
+      </>
+    );
+  }
+
   return (
     <div className="app">
       <TopBar onClose={close} />
       <Ribbon tab={tab} onTab={setTab} />
+      <SignatureBar />
       <div className="main">
         <Rail />
         <Sidebar />
@@ -132,6 +156,7 @@ export default function App() {
         <PropertiesPanel />
       </div>
       <Dialogs />
+      <SignedEditPrompt />
       <FontPrompt />
       <Toasts />
     </div>

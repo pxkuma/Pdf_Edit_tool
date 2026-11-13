@@ -11,7 +11,7 @@ const HINTS: Partial<Record<Tool, string>> = {
   editText: "Drag any text box, image or graphic to move it; click it to get resize handles. Double-click text to type in its original font. Delete removes the selected object.",
   whiteout: "Drag over an area to cover it with white and remove the text underneath.",
   eraseText: "Drag over text to delete it while keeping backgrounds and graphics.",
-  redact: "Drag over an area to permanently remove everything underneath (text, images, graphics).",
+  redact: "Drag over an area to permanently remove everything underneath (text, images, graphics, comments, form fields and links).",
   crop: "Drag a box to crop the page to that area.",
   note: "Click anywhere to place a sticky note.",
   textbox: "Drag a box (or click) to add a text comment.",
@@ -54,7 +54,7 @@ function DrawStyleProps({ title, style, patch, fill }: { title: string; style: D
 }
 
 function ToolProps({ tool }: { tool: Tool }) {
-  const { markup, patchMarkup, ink, patchInk, shape, patchShape, redactColor, setRedactColor } = useEditor();
+  const { markup, patchMarkup, ink, patchInk, shape, patchShape, redactColor, setRedactColor, redactSanitize, setRedactSanitize } = useEditor();
   if (tool === "addText") return <NewTextProps />;
   if (["highlight", "underline", "strikeout", "squiggly"].includes(tool)) {
     return (
@@ -85,6 +85,9 @@ function ToolProps({ tool }: { tool: Tool }) {
         <label className="field">
           <span>Box color</span>
           <ColorPicker value={redactColor} onChange={(c) => c && setRedactColor(c)} palette={["#000000", "#ffffff", "#6b7280", "#e11d48"]} />
+        </label>
+        <label className="check">
+          <input type="checkbox" checked={redactSanitize} onChange={(e) => setRedactSanitize(e.target.checked)} /> Also remove document metadata, bookmarks, attachments and scripts
         </label>
         <p className="note warn" style={{ margin: 0 }}>{HINTS.redact}</p>
       </div>

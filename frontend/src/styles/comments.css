@@ -1,0 +1,249 @@
+/* Comments panel ------------------------------------------------------------- */
+.sidebar.wide {
+  width: calc(var(--sidebar-w) + 100px);
+}
+
+.comments {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.comment-filters {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.comment-search {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+
+.comment-search svg {
+  position: absolute;
+  left: 7px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--text-3);
+  pointer-events: none;
+}
+
+.comment-search .input {
+  width: 100%;
+  padding-left: 25px;
+}
+
+.comment-filters .grid-2 {
+  gap: 6px;
+}
+
+.comment-filters .select {
+  min-width: 0;
+}
+
+.comment-count {
+  font-size: 11px;
+}
+
+.comment-notice {
+  position: relative;
+  padding-right: 30px;
+}
+
+.comment-notice .icon-btn {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+}
+
+.comment-notice ul {
+  margin: 0;
+  padding-left: 16px;
+}
+
+.comment-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.comment-group h4 {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin: 4px 0 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-2);
+}
+
+.comment-group h4 small {
+  font-weight: 400;
+  color: var(--text-3);
+}
+
+.comment-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 8px 6px;
+  border: 1px solid var(--border);
+  border-left-width: 3px;
+  border-radius: var(--radius);
+  background: var(--white);
+  cursor: pointer;
+}
+
+.comment-card:hover {
+  border-color: var(--border-strong);
+}
+
+.comment-card.is-accepted {
+  border-left-color: var(--success);
+}
+
+.comment-card.is-rejected {
+  border-left-color: var(--danger);
+}
+
+.comment-card.is-cancelled {
+  border-left-color: var(--text-3);
+}
+
+.comment-card.is-completed {
+  border-left-color: var(--accent);
+}
+
+.comment-card.active {
+  border-color: var(--accent);
+  background: var(--selected);
+}
+
+.comment-item.reply {
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.comment-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.comment-who {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  line-height: 1.25;
+}
+
+.comment-who strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.comment-who span {
+  font-size: 11px;
+}
+
+.comment-type {
+  display: inline-flex;
+  color: var(--text-3);
+}
+
+.comment-quote {
+  margin: 6px 0 0;
+  padding: 1px 8px;
+  border-left: 3px solid var(--border-strong);
+  color: var(--text-2);
+  font-size: 12px;
+  font-style: italic;
+  overflow-wrap: anywhere;
+}
+
+.comment-text {
+  margin: 6px 0 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.comment-tools {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-top: 4px;
+}
+
+.comment-tools .spacer {
+  flex: 1;
+}
+
+.status-select {
+  width: auto;
+  max-width: 104px;
+}
+
+.status-select.accepted {
+  color: var(--success);
+}
+
+.status-select.rejected {
+  color: var(--danger);
+}
+
+.status-select.cancelled {
+  color: var(--text-3);
+}
+
+.status-select.completed {
+  color: var(--accent);
+}
+
+.composer {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+/* The annotation of the comment chosen in the panel, on the page ---------------- */
+.comment-focus {
+  position: absolute;
+  z-index: 6;
+  border: 2px solid var(--accent);
+  border-radius: 3px;
+  background: rgb(26 95 180 / 0.1);
+  pointer-events: none;
+  animation: comment-flash 1.4s ease-out 1;
+}
+
+@keyframes comment-flash {
+  from {
+    box-shadow: 0 0 0 0 rgb(26 95 180 / 0.55);
+  }
+  to {
+    box-shadow: 0 0 0 16px rgb(26 95 180 / 0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .comment-focus {
+    animation: none;
+  }
+}

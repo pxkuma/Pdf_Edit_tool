@@ -1,19 +1,36 @@
+import { readCommentAuthor } from "../lib/commentAuthor";
 import type {
   AnnotStyle,
+  CommentList,
+  CommentStatus,
+  XfdfImportResult,
   DocFont,
   FontLookup,
   DocInfo,
   EditReport,
   FontFamily,
+  CreatedField,
+  FieldPatch,
+  FieldProposal,
+  FieldValue,
   FormField,
+  ImageAdjust,
+  ImagePlacement,
+  NewFieldRequest,
+  TabOrder,
   Job,
   Metadata,
   OcrCapabilities,
   MutationResponse,
+  RedactResult,
+  StampResult,
   PageModel,
   Point,
   Rect,
   SearchHit,
+  SignatureValidation,
+  SignRequest,
+  SignResult,
   TextStyle,
   TocItem,
 } from "./types";
@@ -44,7 +61,15 @@ async function parseError(response: Response): Promise<ApiError> {
   }
 }
 
-async function request<T>(method: string, url: string, body?: unknown): Promise<T> {
+async function send(url: string, init: RequestInit): Promise<Response> {
+  try {
+    return await fetch(url, init);
+  } catch {
+    throw new ApiError("Cannot reach the PDF Studio server. Is it running?", 0, "network");
+  }
+}
+
+export async function request<T>(method: string, url: string, body?: unknown): Promise<T> {
   const init: RequestInit = { method, headers: {} };
   if (body instanceof FormData) {
     init.body = body;
@@ -52,12 +77,7 @@ async function request<T>(method: string, url: string, body?: unknown): Promise<
     init.body = JSON.stringify(body);
     init.headers = { "Content-Type": "application/json" };
   }
-  let response: Response;
-  try {
-    response = await fetch(url, init);
-  } catch {
-    throw new ApiError("Cannot reach the PDF Studio server. Is it running?", 0, "network");
-  }
+  const response = await send(url, init);
   if (!response.ok) throw await parseError(response);
   const payload = (await response.json()) as Envelope<T>;
   if (!payload.ok) throw new ApiError(payload.error || "Request failed", response.status, payload.code);
@@ -70,7 +90,7 @@ async function download(method: string, url: string, body?: unknown): Promise<{ 
     init.body = JSON.stringify(body);
     init.headers = { "Content-Type": "application/json" };
   }
-  const response = await fetch(url, init);
+  const response = await send(url, init);
   if (!response.ok) throw await parseError(response);
   const disposition = response.headers.get("Content-Disposition") || "";
   const star = /filename\*=UTF-8''([^;]+)/i.exec(disposition);
@@ -80,7 +100,35 @@ async function download(method: string, url: string, body?: unknown): Promise<{ 
 }
 
 const doc = (id: string) => `/api/documents/${id}`;
+
+/** Multipart body for POST /sign. The password only travels in this request; it is never stored. */
+export function signForm(body: SignRequest): FormData {
+  const form = new FormData();
+  form.append("certificate", body.certificate, body.certificate.name || "certificate.p12");
+  form.append("password", body.password);
+  if (body.field) {
+    form.append("field", body.field);
+  } else if (body.placement) {
+    form.append("page", String(body.placement.page));
+    form.append("rect", body.placement.rect.map((n) => n.toFixed(2)).join(","));
+  }
+  form.append("reason", body.reason.trim());
+  form.append("location", body.location.trim());
+  form.append("contact", body.contact.trim());
+  form.append("timestamp_url", body.timestampUrl.trim());
+  form.append("show_details", String(body.showDetails));
+  form.append("utc_offset", String(body.utcOffset));
+  if (body.image) form.append("image", body.image, "signature.png");
+  return form;
+}
 type Mut<T = unknown> = Promise<MutationResponse<T>>;
+
+/** Sign a new annotation with the commenter's name unless the caller already did. */
+function signed(body: Record<string, unknown>): Record<string, unknown> {
+  const style = body.style as { author?: string } | undefined;
+  const author = readCommentAuthor();
+  return author && style && !style.author ? { ...body, style: { ...style, author } } : body;
+}
 
 export const api = {
   upload(file: File, password?: string): Promise<DocInfo> {
@@ -98,7 +146,8 @@ export const api = {
 
   renderUrl: (id: string, page: number, scale: number, token: string) =>
     `${doc(id)}/pages/${page}/render?scale=${scale}&t=${token}`,
-  pageModel: (id: string, page: number) => request<PageModel>("GET", `${doc(id)}/pages/${page}/model`),
+  pageModel: (id: string, page: number, token = "") =>
+    request<PageModel>("GET", `${doc(id)}/pages/${page}/model${token ? `?t=${encodeURIComponent(token)}` : ""}`),
   fonts: () => request<{ families: FontFamily[]; default: string | null }>("GET", "/api/fonts"),
   fontFileUrl: (faceId: string) => `/api/fonts/${faceId}/file`,
   uploadFont(file: File): Promise<{ id: string; family: string; style: string }> {
@@ -168,13 +217,35 @@ export const api = {
   replace: (
     id: string,
     body: { query: string; replacement: string; pages?: string; match_case: boolean; whole_word: boolean },
-  ): Mut<{ replaced: number; skipped: number; pages: number[] }> => request("POST", `${doc(id)}/text/replace`, body),
+  ): Mut<{ replaced: number; skipped: number; pages: number[]; missing_chars?: string[] }> =>
+    request("POST", `${doc(id)}/text/replace`, body),
 
-  addAnnotation: (id: string, body: Record<string, unknown>): Mut<number> => request("POST", `${doc(id)}/annotations`, body),
+  addAnnotation: (id: string, body: Record<string, unknown>): Mut<number> => request("POST", `${doc(id)}/annotations`, signed(body)),
   updateAnnotation: (id: string, page: number, xref: number, style: AnnotStyle, rect?: Rect | null): Mut =>
     request("PATCH", `${doc(id)}/annotations/${page}/${xref}`, { style, rect: rect ?? null }),
   deleteAnnotation: (id: string, page: number, xref: number): Mut =>
     request("DELETE", `${doc(id)}/annotations/${page}/${xref}`),
+
+  comments: (id: string) => request<CommentList>("GET", `${doc(id)}/comments`),
+  addComment: (id: string, body: Record<string, unknown>): Mut<{ xref: number }> => request("POST", `${doc(id)}/comments`, body),
+  editComment: (id: string, page: number, xref: number, body: { text?: string; subject?: string }): Mut =>
+    request("PATCH", `${doc(id)}/comments/${page}/${xref}`, body),
+  deleteComment: (id: string, page: number, xref: number): Mut<{ removed: number }> =>
+    request("DELETE", `${doc(id)}/comments/${page}/${xref}`),
+  replyToComment: (id: string, page: number, xref: number, text: string, author: string): Mut<{ xref: number }> =>
+    request("POST", `${doc(id)}/comments/${page}/${xref}/replies`, { text, author }),
+  setCommentStatus: (
+    id: string,
+    page: number,
+    xref: number,
+    body: { status?: CommentStatus; checked?: boolean; author: string },
+  ): Mut => request("PUT", `${doc(id)}/comments/${page}/${xref}/status`, body),
+  exportXfdf: (id: string) => download("GET", `${doc(id)}/comments/xfdf`),
+  importXfdf(id: string, file: File): Mut<XfdfImportResult> {
+    const form = new FormData();
+    form.append("file", file);
+    return request("POST", `${doc(id)}/comments/xfdf`, form);
+  },
 
   addImage(id: string, page: number, rect: Rect, file: Blob, keepProportion = true): Mut {
     const form = new FormData();
@@ -186,6 +257,10 @@ export const api = {
   },
   moveImage: (id: string, page: number, xref: number, rect: Rect): Mut =>
     request("POST", `${doc(id)}/images/${page}/${xref}/move`, { rect }),
+  placeImage: (id: string, page: number, xref: number, body: ImagePlacement): Mut =>
+    request("POST", `${doc(id)}/images/${page}/${xref}/place`, body),
+  adjustImage: (id: string, page: number, xref: number, body: ImageAdjust): Mut =>
+    request("POST", `${doc(id)}/images/${page}/${xref}/adjust`, body),
   replaceImage(id: string, page: number, xref: number, file: File): Mut {
     const form = new FormData();
     form.append("file", file);
@@ -209,11 +284,11 @@ export const api = {
   cropPages: (id: string, pages: number[], rect: Rect): Mut => request("POST", `${doc(id)}/pages/crop`, { pages, rect }),
   resetCrop: (id: string, pages: number[]): Mut => request("POST", `${doc(id)}/pages/reset-crop`, { pages }),
 
-  redact: (id: string, page: number, rects: Rect[], mode: string, color: string): Mut =>
-    request("POST", `${doc(id)}/redact`, { page, rects, mode, color }),
-  redactSearch: (id: string, query: string, pages: string, color: string): Mut<{ redacted: number }> =>
-    request("POST", `${doc(id)}/redact/search`, { query, pages: pages || null, color }),
-  watermark: (id: string, body: Record<string, unknown>): Mut => request("POST", `${doc(id)}/watermark`, body),
+  redact: (id: string, page: number, rects: Rect[], mode: string, color: string, sanitize = false): Mut<RedactResult> =>
+    request("POST", `${doc(id)}/redact`, { page, rects, mode, color, sanitize }),
+  redactSearch: (id: string, query: string, pages: string, color: string, sanitize = false): Mut<RedactResult & { redacted: number }> =>
+    request("POST", `${doc(id)}/redact/search`, { query, pages: pages || null, color, sanitize }),
+  watermark: (id: string, body: Record<string, unknown>): Mut<StampResult> => request("POST", `${doc(id)}/watermark`, body),
   imageWatermark(id: string, file: File, pages: string, scale: number, opacity: number): Mut {
     const form = new FormData();
     form.append("file", file);
@@ -222,7 +297,8 @@ export const api = {
     form.append("opacity", String(opacity));
     return request("POST", `${doc(id)}/watermark/image`, form);
   },
-  headerFooter: (id: string, body: Record<string, unknown>): Mut => request("POST", `${doc(id)}/header-footer`, body),
+  headerFooter: (id: string, body: Record<string, unknown>): Mut<StampResult> =>
+    request("POST", `${doc(id)}/header-footer`, body),
 
   metadata: (id: string) => request<Metadata>("GET", `${doc(id)}/metadata`),
   setMetadata: (id: string, body: Partial<Metadata>): Mut => request("PUT", `${doc(id)}/metadata`, body),
@@ -230,11 +306,19 @@ export const api = {
   setToc: (id: string, items: TocItem[]): Mut => request("PUT", `${doc(id)}/toc`, { items }),
 
   forms: (id: string) => request<FormField[]>("GET", `${doc(id)}/forms`),
-  fillForms: (id: string, values: { page: number; xref: number; value: string | boolean }[]): Mut =>
+  fillForms: (id: string, values: { page: number; xref: number; value: FieldValue }[]): Mut =>
     request("PUT", `${doc(id)}/forms`, { values }),
-  addField: (id: string, body: { page: number; kind: string; rect: Rect; name: string }): Mut =>
-    request("POST", `${doc(id)}/forms`, body),
+  /** The result is the new field's xref. */
+  addField: (id: string, body: NewFieldRequest): Mut<number> => request("POST", `${doc(id)}/forms`, body),
+  addFields: (id: string, fields: NewFieldRequest[]): Mut<CreatedField[]> =>
+    request("POST", `${doc(id)}/forms/batch`, { fields, uniquify: true }),
+  updateField: (id: string, page: number, xref: number, patch: FieldPatch): Mut =>
+    request("PATCH", `${doc(id)}/forms/${page}/${xref}`, patch),
   deleteField: (id: string, page: number, xref: number): Mut => request("DELETE", `${doc(id)}/forms/${page}/${xref}`),
+  tabOrder: (id: string, page: number) => request<TabOrder>("GET", `${doc(id)}/forms/tab-order/${page}`),
+  setTabOrder: (id: string, page: number, mode: "manual" | "row" | "column", order?: number[]): Mut =>
+    request("PUT", `${doc(id)}/forms/tab-order`, { page, mode, order: order ?? null }),
+  detectFields: (id: string, pages: number[]) => request<FieldProposal[]>("POST", `${doc(id)}/forms/detect`, { pages }),
   flatten: (id: string, annotations: boolean, forms: boolean): Mut =>
     request("POST", `${doc(id)}/flatten`, { annotations, forms }),
 
@@ -242,6 +326,9 @@ export const api = {
   startOcr: (id: string, body: { pages: string | null; language: string; dpi: number; force: boolean }) =>
     request<Job>("POST", `${doc(id)}/ocr`, body),
   job: <T,>(jobId: string) => request<Job<T>>("GET", `/api/jobs/${jobId}`),
+
+  sign: (id: string, body: SignRequest): Mut<SignResult> => request("POST", `${doc(id)}/sign`, signForm(body)),
+  signatures: (id: string) => request<SignatureValidation>("GET", `${doc(id)}/signatures`),
 
   exportPdf: (id: string, options: Record<string, unknown>) => download("POST", `${doc(id)}/export`, options),
   exportImages: (id: string, options: Record<string, unknown>) => download("POST", `${doc(id)}/export/images`, options),

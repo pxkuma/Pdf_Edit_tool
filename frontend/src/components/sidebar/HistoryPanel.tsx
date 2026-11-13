@@ -8,13 +8,12 @@ function time(ts: number): string {
 }
 
 export function HistoryPanel() {
-  const { doc, setDoc, track, run } = useEditor();
+  const { doc, moveInHistory, run } = useEditor();
   if (!doc) return null;
 
   const jump = async (index: number) => {
     await flushEdit();
-    const info = await track(() => api.jump(doc.id, index));
-    if (info) setDoc(info);
+    await moveInHistory(index);
   };
 
   return (
@@ -34,7 +33,7 @@ export function HistoryPanel() {
           </button>
         ))}
       </div>
-      <button className="btn small danger" onClick={() => run(() => api.revert(doc.id), "Reverted to the original file")}>
+      <button className="btn small danger" onClick={() => run(() => api.revert(doc.id), "Reverted to the original file", { allowSigned: true })}>
         <RotateCcw size={14} /> Revert to original
       </button>
       <p className="muted" style={{ fontSize: 11 }}>

@@ -1,6 +1,7 @@
 import type { EditReport, Span, TextBlock, TextStyle } from "../../api/types";
 import { checkSpanFont } from "../../lib/fontPrompt";
 import { ensureFace, findFace, useFonts, variantOf } from "../../lib/fonts";
+import { missingCharsWarning } from "../../lib/missingChars";
 import type { ActiveEdit, SpanDraft } from "../../store/editor";
 import { AUTO_BOX, DEFAULT_PUSH, useEditor } from "../../store/editor";
 
@@ -133,8 +134,9 @@ export function reportEdit(report: EditReport | undefined): void {
     const list = Object.entries(counts).map(([kind, n]) => `${n} ${kind}${n > 1 ? "s" : ""}`).join(", ");
     toast(`Could not move ${list}; ${report.push_skipped.length > 1 ? "they stay" : "it stays"} in place.`, "warning");
   }
-  if (report.missing_chars.length) {
-    toast(`No installed font contains: ${report.missing_chars.join(" ")} — those characters were skipped.`, "warning");
+  const missing = missingCharsWarning(report.missing_chars);
+  if (missing) {
+    toast(missing, "warning");
   } else if (!report.exact_font && report.fonts_used.length > 1) {
     const [original, ...others] = report.fonts_used;
     const family = original.split(/[-,]/)[0].toLowerCase().replace(/[^a-z0-9]/g, "");

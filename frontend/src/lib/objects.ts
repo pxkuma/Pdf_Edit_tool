@@ -20,6 +20,9 @@ export interface PageObject {
   bbox: Rect;
   hit: Rect; // grabbable area (thin rules get some thickness)
   xref?: number;
+  rect?: Rect; // images: un-rotated placement rectangle
+  angle?: number; // images: visual clockwise rotation in degrees
+  opacity?: number;
 }
 
 const MIN_HIT = 6;
@@ -56,7 +59,16 @@ export function pageObjects(model: PageModel): PageObject[] {
   const drawings = (model.drawings ?? []).map((bbox, i): PageObject => ({ key: `d:${i}:${bbox.join(",")}`, kind: "drawing", bbox, hit: grabbable(bbox) }));
   const images = model.images
     .filter((img) => img.editable && img.xref > 0)
-    .map((img, i): PageObject => ({ key: `i:${img.xref}:${i}`, kind: "image", bbox: img.bbox, hit: grabbable(img.bbox), xref: img.xref }));
+    .map((img, i): PageObject => ({
+      key: `i:${img.xref}:${i}`,
+      kind: "image",
+      bbox: img.bbox,
+      hit: grabbable(img.bbox),
+      xref: img.xref,
+      rect: img.rect,
+      angle: img.angle,
+      opacity: img.opacity,
+    }));
   return [...drawings, ...images];
 }
 
@@ -89,7 +101,7 @@ export function resizeObject(rect: Rect, handle: Handle, dx: number, dy: number,
 }
 
 type ObjectSelection =
-  | { kind: "image"; page: number; xref: number; bbox?: Rect }
+  | { kind: "image"; page: number; xref: number; bbox?: Rect; rect?: Rect; angle?: number; opacity?: number }
   | { kind: "graphic"; page: number; xref: number; bbox: Rect }
   | { kind: string; page: number; xref: number }
   | null;
@@ -99,15 +111,45 @@ export function objectFromSelection(selection: ObjectSelection, page: number): P
   if (!selection || selection.page !== page || !("bbox" in selection) || !selection.bbox) return null;
   if (selection.kind === "graphic") return { key: "sel:graphic", kind: "drawing", bbox: selection.bbox, hit: grabbable(selection.bbox) };
   if (selection.kind === "image") {
-    return { key: `sel:image:${selection.xref}`, kind: "image", bbox: selection.bbox, hit: grabbable(selection.bbox), xref: selection.xref };
+    return {
+      key: `sel:image:${selection.xref}`,
+      kind: "image",
+      bbox: selection.bbox,
+      hit: grabbable(selection.bbox),
+      xref: selection.xref,
+      rect: selection.rect,
+      angle: selection.angle,
+      opacity: selection.opacity,
+    };
   }
   return null;
 }
 
 export function selectionOf(object: PageObject, page: number) {
   return object.kind === "image"
-    ? { kind: "image" as const, page, xref: object.xref ?? 0, bbox: object.bbox }
+    ? {
+        kind: "image" as const,
+        page,
+        xref: object.xref ?? 0,
+        bbox: object.bbox,
+        rect: object.rect,
+        angle: object.angle,
+        opacity: object.opacity,
+      }
     : { kind: "graphic" as const, page, xref: 0, bbox: object.bbox };
+}
+
+/** Axis-aligned footprint of ``rect`` rotated ``angle`` degrees about its center. */
+export function rotatedBounds(rect: Rect, angle: number): Rect {
+  if (!angle) return rect;
+  const theta = (angle * Math.PI) / 180;
+  const w = rect[2] - rect[0];
+  const h = rect[3] - rect[1];
+  const cx = (rect[0] + rect[2]) / 2;
+  const cy = (rect[1] + rect[3]) / 2;
+  const bw = Math.abs(w * Math.cos(theta)) + Math.abs(h * Math.sin(theta));
+  const bh = Math.abs(w * Math.sin(theta)) + Math.abs(h * Math.cos(theta));
+  return [cx - bw / 2, cy - bh / 2, cx + bw / 2, cy + bh / 2];
 }
 
 /** Same object (kind, image, place). */

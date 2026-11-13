@@ -8,19 +8,13 @@ import { Dropdown, MenuItem } from "../common/Dropdown";
 const ZOOMS = [0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4];
 
 export async function undo(): Promise<void> {
-  await flushEdit();
-  const { doc, track, setDoc } = useEditor.getState();
-  if (!doc?.canUndo) return;
-  const info = await track(() => api.undo(doc.id));
-  if (info) setDoc(info);
+  await flushEdit(); // an uncommitted draft is applied first, then undone with the rest
+  await useEditor.getState().moveInHistory("undo");
 }
 
 export async function redo(): Promise<void> {
   await flushEdit();
-  const { doc, track, setDoc } = useEditor.getState();
-  if (!doc?.canRedo) return;
-  const info = await track(() => api.redo(doc.id));
-  if (info) setDoc(info);
+  await useEditor.getState().moveInHistory("redo");
 }
 
 export async function quickDownload(): Promise<void> {

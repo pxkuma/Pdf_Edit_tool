@@ -14,7 +14,9 @@ from __future__ import annotations
 
 import io
 import logging
+import os
 import re
+import tempfile
 import threading
 import urllib.error
 import urllib.parse
@@ -32,6 +34,7 @@ log = logging.getLogger(__name__)
 
 GOOGLE_CSS = "https://fonts.googleapis.com/css2"
 FONT_HOST = "fonts.gstatic.com"
+ALLOWED_HOSTS = frozenset({"fonts.googleapis.com", FONT_HOST})
 MAX_CSS_BYTES = 256 * 1024
 MAX_FONT_BYTES = 15 * 1024 * 1024
 TIMEOUT_SECONDS = 15
@@ -49,6 +52,14 @@ COMMERCIAL = (
     "wingdings", "webdings", "msmincho", "msgothic", "simsun", "simhei", "mangal", "aptos",
     "bahnschrift", "sylfaen", "impact", "comicsans", "bookman", "optima", "univers", "baskerville",
 )
+
+# What may follow a commercial family name and still be that family ("SegoeUI",
+# "TimesNewRomanPS", "HelveticaNeue"). Anything else is another family that only
+# shares the prefix, often a free one ("Courier Prime", "Symbola").
+_COMMERCIAL_VARIANT = re.compile(
+    r"^(?:mt|ps|pro|std|lt|neue|ui|next|narrow|black|unicode|ms|new|roman|grande|sans|serif|bright|console"
+    r"|gothic|schoolbook|book|linotype|pt|nova|com|premier|light|semilight|condensed|cond|display|text|caption"
+    r"|script|print|historic|emoji|mono|semibold|bold|italic|regular|medium|heavy|thin|\d+)*$")
 
 _STYLE_SUFFIX = re.compile(
     r"(" + "|".join(sorted({w for w, _ in STYLE_WEIGHTS} | {"italic", "oblique", "it", "mt", "ps", "psmt"},
@@ -78,13 +89,29 @@ class FontLookup:
     substitute: str | None  # installed family used meanwhile
 
 
+def _check_url(url: str) -> None:
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme != "https" or parsed.hostname not in ALLOWED_HOSTS:
+        raise FontLibraryError("Refusing a font download from an unexpected address.")
+
+
+class SafeRedirect(urllib.request.HTTPRedirectHandler):
+    """Follow redirects only within the font library (HTTPS, allowed hosts)."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001, ANN201 - urllib signature
+        _check_url(newurl)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+_opener = urllib.request.build_opener(SafeRedirect)
+
+
 def fetch_url(url: str, limit: int) -> bytes:
-    """GET ``url`` (https only), at most ``limit`` bytes."""
-    if not url.startswith("https://"):
-        raise FontLibraryError("Refusing a non-HTTPS font download.")
+    """GET ``url`` (HTTPS, font library hosts only, also after redirects), at most ``limit`` bytes."""
+    _check_url(url)
     request = urllib.request.Request(url, headers={"User-Agent": "PDFStudio/1.0"})
     try:
-        with urllib.request.urlopen(request, timeout=TIMEOUT_SECONDS) as response:
+        with _opener.open(request, timeout=TIMEOUT_SECONDS) as response:
             data = response.read(limit + 1)
     except urllib.error.HTTPError as exc:
         if exc.code in (400, 404):
@@ -141,7 +168,7 @@ def style_of(pdf_name: str) -> tuple[int, bool]:
 def is_commercial(pdf_name: str) -> bool:
     candidates = family_candidates(pdf_name) or [pdf_name]
     key = normalize_font_name(candidates[0])
-    return any(key == word or key.startswith(word) for word in COMMERCIAL)
+    return any(key.startswith(word) and _COMMERCIAL_VARIANT.match(key[len(word):]) for word in COMMERCIAL)
 
 
 # ------------------------------------------------------------------ lookup
@@ -219,6 +246,18 @@ def _validated_font(data: bytes, family: str) -> None:
         raise FontLibraryError(f"The downloaded font is “{found}”, not “{family}”.")
 
 
+def _write_atomic(path: Path, data: bytes) -> None:
+    """Concurrent downloads of one family never see (or install) a half-written file."""
+    handle, temp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.stem}-", suffix=".part")
+    try:
+        with os.fdopen(handle, "wb") as out:
+            out.write(data)
+        os.replace(temp, path)
+    except BaseException:
+        Path(temp).unlink(missing_ok=True)
+        raise
+
+
 def download(catalog: FontCatalog, pdf_name: str, target_dir: Path, fetch: Fetch | None = None) -> list[FontFace]:
     """Install the family a PDF font belongs to (its weight plus regular/bold/italic)."""
     fetch = fetch or fetch_url
@@ -247,7 +286,7 @@ def download(catalog: FontCatalog, pdf_name: str, target_dir: Path, fetch: Fetch
             data = fetch(url, MAX_FONT_BYTES)
             _validated_font(data, family)
             path = target_dir / f"gf-{slug}-{weight}{'i' if italic else ''}.ttf"
-            path.write_bytes(data)
+            _write_atomic(path, data)
             face = catalog.add_user_font(path)
             if face is None:
                 path.unlink(missing_ok=True)

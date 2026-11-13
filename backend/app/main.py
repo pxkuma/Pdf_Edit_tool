@@ -8,24 +8,27 @@ from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import FileResponse, JSONResponse
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import JSONResponse
 
 from . import deps
-from .api import documents, edits, fonts, ocr, pages
+from .api import comments, compare, documents, edits, fonts, forms, ocr, pages, signatures
+from .frontend import mount_frontend
 from .pdf.annots import AnnotationError
 from .pdf.doctools import ToolError
 from .pdf.forms import FormError
 from .pdf.images import ImageError
 from .pdf.ocr import OcrError
 from .pdf.pages import PageError
+from .pdf.sigcert import CertificateError
+from .pdf.signing import SignatureError
 from .pdf.textedit import TextEditError
 from .storage import DocumentNotFound, InvalidDocument, PasswordRequired
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("pdf-studio")
 
-USER_ERRORS = (TextEditError, AnnotationError, ToolError, FormError, ImageError, PageError, InvalidDocument, OcrError)
+USER_ERRORS = (TextEditError, AnnotationError, ToolError, FormError, ImageError, PageError, InvalidDocument, OcrError,
+               CertificateError, SignatureError)
 
 
 async def _cleanup_loop() -> None:
@@ -35,6 +38,9 @@ async def _cleanup_loop() -> None:
             removed = await asyncio.to_thread(deps.store().cleanup_expired, cfg.doc_ttl_hours)
             if removed:
                 log.info("Removed %d expired document(s)", removed)
+            stale = await asyncio.to_thread(deps.compare_store().cleanup)
+            if stale:
+                log.info("Removed %d expired comparison file(s)", stale)
         except Exception:  # noqa: BLE001 - never let the janitor die
             log.exception("Cleanup failed")
         await asyncio.sleep(3600)
@@ -94,28 +100,17 @@ for error_type in USER_ERRORS:
 app.include_router(documents.router)
 app.include_router(pages.router)
 app.include_router(edits.router)
+app.include_router(comments.router)
+app.include_router(forms.router)
 app.include_router(fonts.router)
 app.include_router(ocr.router)
+app.include_router(signatures.router)
+app.include_router(compare.router)
 
 
 @app.get("/api/health")
 def health() -> dict:
-    return {"ok": True, "data": {"status": "up"}}
+    return {"ok": True, "data": {"status": "up", "app": "pdf-studio"}}
 
 
-_static = deps.settings().static_dir
-if (_static / "assets").exists():
-    app.mount("/assets", StaticFiles(directory=_static / "assets"), name="assets")
-
-
-@app.get("/{path:path}", include_in_schema=False)
-def spa(path: str) -> FileResponse:
-    if path.startswith("api/"):
-        raise HTTPException(status_code=404, detail="Not found")
-    candidate = (_static / path).resolve()
-    if path and candidate.is_file() and _static.resolve() in candidate.parents:
-        return FileResponse(candidate)
-    index = _static / "index.html"
-    if not index.exists():
-        raise HTTPException(status_code=404, detail="Frontend not built. Run the Docker image or `npm run build`.")
-    return FileResponse(index, headers={"Cache-Control": "no-cache"})
+mount_frontend(app, deps.settings().static_dir)  # last: its catch-all route must not shadow the API

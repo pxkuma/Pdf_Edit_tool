@@ -108,6 +108,30 @@ class Mutation:
     result: Any = None
 
 
+REPLACE_ATTEMPTS = 20
+REPLACE_PAUSE_SECONDS = 0.02
+
+
+def _replace_file(source: Path, target: Path) -> None:
+    """Atomic rename over ``target``. Windows refuses while another thread has ``target`` open, so retry briefly."""
+    for attempt in range(REPLACE_ATTEMPTS):
+        try:
+            source.replace(target)
+            return
+        except PermissionError:
+            if attempt == REPLACE_ATTEMPTS - 1:
+                raise
+            time.sleep(REPLACE_PAUSE_SECONDS)
+
+
+def _remove_file(path: Path) -> None:
+    """Delete a version file. A file Windows still holds open is left for the expiry cleanup, not an error."""
+    try:
+        path.unlink(missing_ok=True)
+    except PermissionError:
+        log.warning("Could not delete %s yet (in use); it is removed when the document expires", path)
+
+
 def new_token() -> str:
     return secrets.token_hex(6)
 
@@ -123,26 +147,46 @@ def _load_any(data: bytes, password: str | None) -> tuple[fitz.Document, bool]:
         doc = fitz.open(stream=data)
     except Exception as exc:  # noqa: BLE001 - MuPDF raises generic errors
         raise InvalidDocument("This file could not be opened as a PDF or image.") from exc
-    encrypted = False
-    if doc.needs_pass:
-        encrypted = True
-        if not password or not doc.authenticate(password):
+    try:
+        encrypted = False
+        if doc.needs_pass:
+            encrypted = True
+            if not password or not doc.authenticate(password):
+                raise PasswordRequired("This PDF is password protected.")
+        if not doc.is_pdf:
+            try:
+                converted = fitz.open("pdf", doc.convert_to_pdf())
+            except Exception as exc:  # noqa: BLE001
+                raise InvalidDocument("This file type cannot be converted to PDF.") from exc
             doc.close()
-            raise PasswordRequired("This PDF is password protected.")
-    if not doc.is_pdf:
-        try:
-            converted = fitz.open("pdf", doc.convert_to_pdf())
-        except Exception as exc:  # noqa: BLE001
-            raise InvalidDocument("This file type cannot be converted to PDF.") from exc
-        doc.close()
-        doc = converted
-    if doc.page_count == 0:
-        raise InvalidDocument("The document has no pages.")
+            doc = converted
+        if doc.page_count == 0:
+            raise InvalidDocument("The document has no pages.")
+    except BaseException:
+        doc.close()  # never leave a half-opened handle behind
+        raise
     return doc, encrypted
+
+
+def load_upload(data: bytes, password: str | None = None) -> tuple[fitz.Document, bool]:
+    """Open an uploaded PDF, image or other supported file as a PDF (and decrypt it)."""
+    return _load_any(data, password)
 
 
 def serialize(doc: fitz.Document) -> bytes:
     return doc.tobytes(garbage=1, deflate=True, encryption=fitz.PDF_ENCRYPT_NONE)
+
+
+def has_signatures(doc: fitz.Document) -> bool:
+    """The document carries digital signatures whose signed bytes must not be rewritten."""
+    if not doc.is_pdf or doc.get_sigflags() < 1:
+        return False
+    return any(w.is_signed for page in doc for w in page.widgets(types=[fitz.PDF_WIDGET_TYPE_SIGNATURE]))
+
+
+def keeps_original_bytes(doc: fitz.Document, encrypted: bool) -> bool:
+    """Store an upload as-is when rewriting it would break its digital signatures."""
+    return not encrypted and doc.is_pdf and not doc.is_repaired and has_signatures(doc)
 
 
 class DocumentStore:
@@ -171,13 +215,13 @@ class DocumentStore:
         path = self._state_path(doc_id)
         if not path.exists():
             raise DocumentNotFound(doc_id)
-        return DocState.from_json(json.loads(path.read_text()))
+        return DocState.from_json(json.loads(path.read_text(encoding="utf-8")))
 
     def _save_state(self, state: DocState) -> None:
         path = self._state_path(state.id)
         tmp = path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(state.to_json()))
-        tmp.replace(path)
+        tmp.write_text(json.dumps(state.to_json()), encoding="utf-8")
+        _replace_file(tmp, path)
 
     def update_meta(self, doc_id: str, **values: Any) -> DocState:
         with PDF_LOCK:
@@ -191,7 +235,7 @@ class DocumentStore:
         with PDF_LOCK:
             doc, encrypted = _load_any(data, password)
             try:
-                payload = serialize(doc)
+                payload = data if keeps_original_bytes(doc, encrypted) else serialize(doc)
                 pages = doc.page_count
             finally:
                 doc.close()
@@ -263,31 +307,71 @@ class DocumentStore:
     def mutate(self, doc_id: str, label: str, operation: Callable[[fitz.Document], Mutation | None]) -> tuple[DocState, Any]:
         with PDF_LOCK:
             state = self.get(doc_id)
-            doc = fitz.open(self.version_path(state))
-            try:
-                old_count = doc.page_count
-                mutation = operation(doc) or Mutation()
-                if doc.page_count == 0:
-                    raise InvalidDocument("A document must keep at least one page.")
-                payload = serialize(doc)
-                new_count = doc.page_count
-            finally:
+            source = self.version_path(state)
+            doc = fitz.open(source)
+            if has_signatures(doc):
                 doc.close()
+                payload, mutation, old_count, new_count = self._mutate_incrementally(source, operation)
+            else:
+                try:
+                    old_count = doc.page_count
+                    mutation = _run_operation(doc, operation)
+                    payload = serialize(doc)
+                    new_count = doc.page_count
+                finally:
+                    doc.close()
             tokens = _next_tokens(state.current.tokens, old_count, new_count, mutation)
             new_state = self._append_version(state, label, payload, tokens)
             return new_state, mutation.result
 
+    def _mutate_incrementally(self, source: Path, operation: Callable[[fitz.Document], Mutation | None]) -> tuple[bytes, Mutation, int, int]:
+        """Apply an edit to a signed document as an appended revision (like Acrobat).
+
+        The signed bytes stay untouched, so each signature still validates for the revision it
+        signed and validation reports the later changes. MuPDF can only append to the file it
+        opened, so the edit runs on a scratch copy next to the versions.
+        """
+        scratch = source.with_name(f"incr-{secrets.token_hex(6)}.pdf")
+        shutil.copyfile(source, scratch)
+        try:
+            doc = fitz.open(scratch)
+            try:
+                old_count = doc.page_count
+                mutation = _run_operation(doc, operation)
+                new_count = doc.page_count
+                if doc.can_save_incrementally():
+                    doc.saveIncr()
+                    payload = scratch.read_bytes()
+                else:
+                    # MuPDF refuses to append after a redaction (text edits remove glyphs that way):
+                    # the removed content would survive in the signed revision. So the file is
+                    # rewritten, and the signatures stop validating, as the user was warned.
+                    payload = serialize(doc)
+            finally:
+                doc.close()
+        finally:
+            _remove_file(scratch)
+        return payload, mutation, old_count, new_count
+
+    def replace_if_current(self, doc_id: str, expected_file: str, label: str, payload: bytes) -> DocState:
+        """``replace_document`` unless another change landed since ``expected_file`` was read."""
+        with PDF_LOCK:
+            if self.get(doc_id).current.file != expected_file:
+                raise InvalidDocument("The document changed while it was being signed. Please sign again.")
+            return self.replace_document(doc_id, label, payload)
+
     def _append_version(self, state: DocState, label: str, payload: bytes, tokens: tuple[str, ...]) -> DocState:
         directory = self._dir(state.id)
+        self._drop_cache(state.id)  # Windows cannot delete a file a cached handle still has open
         kept = list(state.versions[: state.cursor + 1])
         for dropped in state.versions[state.cursor + 1:]:
-            (directory / dropped.file).unlink(missing_ok=True)
+            _remove_file(directory / dropped.file)
         number = int(kept[-1].file[1:5]) + 1 if kept else 0
         version = Version(f"v{number % 10000:04d}.pdf", label[:80], tokens, time.time(), len(payload))
         (directory / version.file).write_bytes(payload)
         kept.append(version)
         while len(kept) > self.max_history or (len(kept) > 2 and sum(v.size for v in kept) > MAX_HISTORY_BYTES):
-            (directory / kept.pop(0).file).unlink(missing_ok=True)
+            _remove_file(directory / kept.pop(0).file)
         new_state = replace(state, versions=tuple(kept), cursor=len(kept) - 1)
         self._save_state(new_state)
         return new_state
@@ -311,12 +395,21 @@ class DocumentStore:
             return new_state
 
     def undo(self, doc_id: str) -> DocState:
-        state = self.get(doc_id)
-        return self.jump(doc_id, state.cursor - 1) if state.can_undo else state
+        with PDF_LOCK:  # read the cursor and move it in one step, or two undos can step back only once
+            state = self.get(doc_id)
+            return self.jump(doc_id, state.cursor - 1) if state.can_undo else state
 
     def redo(self, doc_id: str) -> DocState:
-        state = self.get(doc_id)
-        return self.jump(doc_id, state.cursor + 1) if state.can_redo else state
+        with PDF_LOCK:
+            state = self.get(doc_id)
+            return self.jump(doc_id, state.cursor + 1) if state.can_redo else state
+
+
+def _run_operation(doc: fitz.Document, operation: Callable[[fitz.Document], Mutation | None]) -> Mutation:
+    mutation = operation(doc) or Mutation()
+    if doc.page_count == 0:
+        raise InvalidDocument("A document must keep at least one page.")
+    return mutation
 
 
 def _next_tokens(old: tuple[str, ...], old_count: int, new_count: int, mutation: Mutation) -> tuple[str, ...]:

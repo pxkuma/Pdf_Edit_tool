@@ -197,3 +197,44 @@ def test_page_model_flags_installed_fonts(client, doc):
     spans = [s for b in model["text"]["blocks"] for line in b["lines"] for s in line["spans"]]
     assert all("installed" in s for s in spans)
     assert any(s["installed"] for s in spans)  # sample uses Liberation fonts, which are installed
+
+
+# ------------------------------------------------------------------ audit C21
+@pytest.mark.parametrize("pdf_name", ["CourierPrime-Regular", "Symbola", "Courier Prime Bold"])
+def test_free_families_sharing_a_commercial_prefix_are_not_commercial(pdf_name):
+    assert not fontlib.is_commercial(pdf_name)
+
+
+@pytest.mark.parametrize("pdf_name", ["HelveticaNeue-Bold", "SegoeUI-Semibold", "CenturyGothic", "LucidaSansUnicode",
+                                      "ArialNarrow-Bold", "MyriadPro-Regular", "FuturaPT-Book"])
+def test_commercial_variants_stay_commercial(pdf_name):
+    assert fontlib.is_commercial(pdf_name)
+
+
+def test_fetch_refuses_hosts_outside_the_font_library():
+    with pytest.raises(fontlib.FontLibraryError):
+        fontlib.fetch_url("https://evil.example/font.ttf", 100)
+
+
+@pytest.mark.parametrize("target", ["https://evil.example/x.ttf", "http://fonts.gstatic.com/x.ttf"])
+def test_redirects_leaving_the_font_library_are_refused(target):
+    import urllib.request
+
+    request = urllib.request.Request("https://fonts.gstatic.com/s/x.ttf")
+    with pytest.raises(fontlib.FontLibraryError):
+        fontlib.SafeRedirect().redirect_request(request, None, 302, "Found", {}, target)
+
+
+def test_redirects_inside_the_font_library_are_followed():
+    import urllib.request
+
+    request = urllib.request.Request("https://fonts.googleapis.com/css2?family=Lato")
+    follow = fontlib.SafeRedirect().redirect_request(request, None, 302, "Found", {}, "https://fonts.gstatic.com/s/x.ttf")
+    assert follow is not None and follow.full_url == "https://fonts.gstatic.com/s/x.ttf"
+
+
+def test_download_leaves_no_partial_files(catalog, tmp_path):
+    target = tmp_path / "fonts"
+    fontlib.download(catalog, "Montserrat-Regular", target, fetch=FakeGoogle())
+    files = list(target.iterdir())
+    assert files and all(p.suffix == ".ttf" and not p.name.startswith(".") for p in files)

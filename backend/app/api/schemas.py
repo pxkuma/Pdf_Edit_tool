@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 Rect = tuple[float, float, float, float]
 Point = tuple[float, float]
@@ -148,6 +148,42 @@ class AnnotationUpdateBody(BaseModel):
     rect: Rect | None = None
 
 
+class CommentBody(BaseModel):
+    page: int = Field(ge=0)
+    kind: Literal["note", "highlight", "underline", "strikeout", "squiggly", "textbox"] = "note"
+    text: str = Field("", max_length=20000)
+    author: str = Field("", max_length=200)
+    subject: str = Field("", max_length=200)
+    color: str | None = Field(None, pattern=HEX_COLOR)
+    point: Point | None = None  # notes
+    rects: list[Rect] = Field(default_factory=list, max_length=5000)  # text markup
+    rect: Rect | None = None  # text boxes
+    font_size: float = Field(12, gt=2, le=200)
+    text_color: str = Field("#111111", pattern=HEX_COLOR)
+
+
+class CommentEditBody(BaseModel):
+    text: str | None = Field(None, max_length=20000)
+    subject: str | None = Field(None, max_length=200)
+
+
+class ReplyBody(BaseModel):
+    text: str = Field(min_length=1, max_length=20000)
+    author: str = Field("", max_length=200)
+
+
+class CommentStatusBody(BaseModel):
+    status: Literal["none", "accepted", "rejected", "cancelled", "completed"] | None = None
+    checked: bool | None = None
+    author: str = Field("", max_length=200)
+
+    @model_validator(mode="after")
+    def _one_change(self) -> "CommentStatusBody":
+        if self.checked is None and self.status is None:
+            raise ValueError("Give a status or a checkmark.")
+        return self
+
+
 class PagesBody(BaseModel):
     pages: list[int] = Field(min_length=1, max_length=10000)
 
@@ -175,12 +211,14 @@ class RedactBody(BaseModel):
     rects: list[Rect] = Field(min_length=1, max_length=1000)
     mode: Literal["redact", "whiteout", "text"] = "redact"
     color: str = Field("#000000", pattern=HEX_COLOR)
+    sanitize: bool = False  # also remove metadata, XMP, bookmarks, attachments and scripts
 
 
 class RedactSearchBody(BaseModel):
     query: str = Field(min_length=1, max_length=500)
     pages: str | None = Field(None, max_length=500)
     color: str = Field("#000000", pattern=HEX_COLOR)
+    sanitize: bool = False  # also remove metadata, XMP, bookmarks, attachments and scripts
 
 
 class StampStyleBody(BaseModel):
@@ -228,24 +266,6 @@ class TocBody(BaseModel):
     items: list[TocItem] = Field(max_length=5000)
 
 
-class FieldValue(BaseModel):
-    page: int = Field(ge=0)
-    xref: int = Field(gt=0)
-    value: str | bool | None = None
-
-
-class FormValuesBody(BaseModel):
-    values: list[FieldValue] = Field(max_length=5000)
-
-
-class NewFieldBody(BaseModel):
-    page: int = Field(ge=0)
-    kind: Literal["text", "checkbox"]
-    rect: Rect
-    name: str = Field("", max_length=120)
-    value: str | bool | None = None
-
-
 class FlattenBody(BaseModel):
     annotations: bool = True
     forms: bool = True
@@ -259,13 +279,15 @@ class ExportBody(BaseModel):
     image_quality: int = Field(75, ge=10, le=95)
     flatten_annotations: bool = False
     flatten_forms: bool = False
-    user_password: str = Field("", max_length=128)
-    owner_password: str = Field("", max_length=128)
+    user_password: str = Field("", max_length=40)  # MuPDF rejects longer passwords
+    owner_password: str = Field("", max_length=40)
     allow_print: bool = True
     allow_copy: bool = True
     allow_modify: bool = True
     allow_annotate: bool = True
     remove_metadata: bool = False
+    # A signed document is downloaded byte-for-byte (other options ignored) so its signatures stay valid.
+    keep_signatures: bool = True
 
 
 class ExportImagesBody(BaseModel):
@@ -284,6 +306,26 @@ class SplitBody(BaseModel):
 
 class ImageMoveBody(BaseModel):
     rect: Rect
+
+
+class ImagePlaceBody(BaseModel):
+    """Full placement state of one image on one page: position, rotation, opacity, stacking."""
+
+    rect: Rect
+    angle: float = Field(0, ge=-360, le=360)
+    opacity: float = Field(1, gt=0, le=1)
+    overlay: bool = True
+
+
+class ImageAdjustBody(BaseModel):
+    brightness: float = Field(1, ge=0.1, le=3)
+    contrast: float = Field(1, ge=0.1, le=3)
+    saturation: float = Field(1, ge=0, le=3)
+    grayscale: bool = False
+    flip_h: bool = False
+    flip_v: bool = False
+    crop: tuple[float, float, float, float] | None = Field(
+        None, description="left, top, right, bottom as fractions of the image")
 
 
 class OcrBody(BaseModel):

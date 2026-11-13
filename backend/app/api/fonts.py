@@ -8,6 +8,7 @@ import re
 from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
+from starlette.concurrency import run_in_threadpool
 
 from .. import deps
 from ..pdf import fontlib
@@ -67,14 +68,19 @@ def font_file(face_id: str) -> FileResponse:
     face = deps.catalog().get(face_id)
     if face is None:
         raise HTTPException(status_code=404, detail="Font not found.")
-    media = "font/otf" if face.path.lower().endswith(".otf") else "font/ttf"
-    return FileResponse(face.path, media_type=media, headers={"Cache-Control": "public, max-age=86400"})
+    path = deps.catalog().face_file(face)  # collection faces are served as single fonts
+    media = "font/otf" if path.lower().endswith(".otf") else "font/ttf"
+    return FileResponse(path, media_type=media, headers={"Cache-Control": "public, max-age=86400"})
 
 
 @router.post("")
 async def upload_font(file: UploadFile = File(...)) -> dict:
     data = await read_upload(file, MAX_FONT_BYTES, "font")
-    name = file.filename or "font.ttf"
+    # Disk writes and the font catalog (which scans fonts under its own lock) must not run on the event loop.
+    return await run_in_threadpool(_store_font, file.filename or "font.ttf", data)
+
+
+def _store_font(name: str, data: bytes) -> dict:
     suffix = ".otf" if name.lower().endswith(".otf") or data[:4] == b"OTTO" else ".ttf"
     if data[:4] not in (b"\x00\x01\x00\x00", b"OTTO", b"true"):
         raise HTTPException(status_code=400, detail="Only TrueType (.ttf) and OpenType (.otf) fonts are supported.")

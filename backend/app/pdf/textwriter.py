@@ -14,7 +14,7 @@ from dataclasses import dataclass, field, replace
 
 import pymupdf as fitz
 
-from . import fontres, pdfobj
+from . import fontembed, fontres, pdfobj
 from .fonts import FontCatalog, FontFace
 
 SPACE_FALLBACK_WIDTH = 250.0  # 1/1000 em, used when no font supplies a space
@@ -76,8 +76,18 @@ class PlacedLine:
 
 @dataclass
 class _FaceEntry:
+    """A face of the chain; its font file is opened (and cached) on first use."""
+
     face: FontFace
-    font: fitz.Font
+    catalog: FontCatalog
+
+    @property
+    def font(self) -> fitz.Font | None:
+        return self.catalog.open_font(self.face)
+
+    @property
+    def file(self) -> str:
+        return self.catalog.face_file(self.face)
 
 
 @dataclass
@@ -99,65 +109,78 @@ class FontChain:
     ) -> "FontChain":
         faces: list[FontFace] = [primary] if primary else []
         if include_coverage:
-            faces += [face for face in catalog.coverage_fallbacks() if face not in faces]
-        entries = []
-        for face in faces:
-            try:
-                entries.append(_FaceEntry(face, fitz.Font(fontfile=face.path)))
-            except Exception:  # noqa: BLE001 - unreadable font file
-                continue
-        return cls(embedded=embedded, faces=entries)
+            fallbacks = catalog.coverage_fallbacks(primary.bold, primary.italic, primary.serif) if primary \
+                else catalog.coverage_fallbacks()
+            faces += [face for face in fallbacks if face not in faces]
+        return cls(embedded=embedded, faces=[_FaceEntry(face, catalog) for face in faces])
 
     def encode(self, text: str) -> list[Glyph]:
+        """Glyphs for text. The embedded font is matched greedily, ligatures first,
+        so a subset holding only the "fi" glyph keeps "fi" in the original font."""
+        pieces = self.embedded.segments(text) if self.embedded is not None else [(c, None) for c in text]
         glyphs: list[Glyph] = []
-        for char in text:
-            glyph = self._encode_char(char)
-            if glyph is not None:
-                glyphs.append(glyph)
-        return glyphs
-
-    def _encode_char(self, char: str) -> Glyph | None:
-        if char in "\r\n":
-            return None
-        if self.embedded is not None:
-            code = self.embedded.code_for(char)
+        for piece, code in pieces:
             if code is not None:
                 key = f"e{self.embedded.xref}"
                 self.used_keys.add(key)
-                return Glyph(key, code, self.embedded.width_of(code), char)
+                glyphs.append(Glyph(key, code, self.embedded.width_of(code), piece))
+            else:
+                glyphs.extend(self._encode_fallback(piece))
+        return glyphs
+
+    def _encode_fallback(self, char: str) -> list[Glyph]:
+        if char in "\r\n":
+            return []
         if char == " " or char == "\t":
-            return self._space_glyph(char)
+            return [self._space_glyph(char)]
         for entry in self.faces:
-            gid = entry.font.has_glyph(ord(char))
+            font = entry.font
+            gid = font.has_glyph(ord(char)) if font is not None else 0
             if gid:
                 key = f"s{entry.face.id}"
                 self.used_keys.add(key)
-                width = entry.font.glyph_advance(ord(char)) * 1000.0
-                return Glyph(key, gid.to_bytes(2, "big"), width, char)
+                width = font.glyph_advance(ord(char)) * 1000.0
+                return [Glyph(key, gid.to_bytes(2, "big"), width, char)]
+        decomposed = fontres.LIGATURE_DECOMPOSITION.get(char)
+        if decomposed is not None:  # no face draws U+FB01: write "f" + "i"
+            return self.encode(decomposed)
         self.missing.add(char)
-        return None
+        return []
 
     def _space_glyph(self, char: str) -> Glyph:
-        width = SPACE_FALLBACK_WIDTH
-        if self.faces:
-            width = self.faces[0].font.glyph_advance(32) * 1000.0 or SPACE_FALLBACK_WIDTH
-        if self.embedded is not None:
-            # Average-ish space for the original font: use its default width hint.
-            width = width if self.embedded.subtype != "Type3" else SPACE_FALLBACK_WIDTH
+        """An advance-only space for fonts without a space glyph: the original font's
+        own space width when its /Widths has one, else the substitute's."""
+        width = self._embedded_space_width()
+        if width is None:
+            primary = self._primary_font()
+            if primary is not None and (self.embedded is None or self.embedded.subtype != "Type3"):
+                width = primary.glyph_advance(32) * 1000.0
+        width = width or SPACE_FALLBACK_WIDTH
         return Glyph("", b"", width * (4 if char == "\t" else 1), char)
 
+    def _embedded_space_width(self) -> float | None:
+        font = self.embedded
+        if font is None or font.code_bytes != 1 or not font.widths.get(b" "):
+            return None
+        return font.width_of(b" ")
+
     def face_for_key(self, key: str) -> FontFace | None:
-        return next((e.face for e in self.faces if f"s{e.face.id}" == key), None)
+        entry = self.entry_for_key(key)
+        return entry.face if entry is not None else None
+
+    def entry_for_key(self, key: str) -> _FaceEntry | None:
+        return next((e for e in self.faces if f"s{e.face.id}" == key), None)
+
+    def _primary_font(self) -> fitz.Font | None:
+        return next((e.font for e in self.faces if e.font is not None), None)
 
     def ascender(self) -> float:
-        if self.faces:
-            return self.faces[0].font.ascender
-        return 0.8
+        font = self._primary_font()
+        return font.ascender if font is not None else 0.8
 
     def descender(self) -> float:
-        if self.faces:
-            return self.faces[0].font.descender
-        return -0.2
+        font = self._primary_font()
+        return font.descender if font is not None else -0.2
 
 
 def line_width(glyphs: list[Glyph], style: TextStyle, space_extra: float = 0.0) -> float:
@@ -173,8 +196,23 @@ def line_width(glyphs: list[Glyph], style: TextStyle, space_extra: float = 0.0) 
     return total * scale
 
 
-def register_fonts(doc: fitz.Document, page: fitz.Page, chain: FontChain) -> dict[str, str]:
-    """Make every font used by the chain available as a page resource."""
+def _glyphs_by_key(lines: list[PlacedLine]) -> dict[str, dict[int, tuple[str, float]]]:
+    """Glyph id -> (text, width) of every fallback-face glyph, per font key."""
+    used: dict[str, dict[int, tuple[str, float]]] = {}
+    for line in lines:
+        for glyph in line.glyphs:
+            if glyph.font_key.startswith("s") and glyph.code:
+                used.setdefault(glyph.font_key, {})[int.from_bytes(glyph.code, "big")] = (glyph.char, glyph.width)
+    return used
+
+
+def register_fonts(doc: fitz.Document, page: fitz.Page, chain: FontChain,
+                   lines: list[PlacedLine] | None = None) -> dict[str, str]:
+    """Make every font used by the chain available as a page resource.
+
+    Fallback faces are embedded as subsets holding the glyphs of ``lines``.
+    """
+    used = _glyphs_by_key(lines or [])
     names: dict[str, str] = {}
     for key in sorted(chain.used_keys):
         if key.startswith("e") and chain.embedded is not None:
@@ -183,21 +221,27 @@ def register_fonts(doc: fitz.Document, page: fitz.Page, chain: FontChain) -> dic
                 pdfobj.add_resource(doc, page, "Font", name, f"{chain.embedded.xref} 0 R")
             names[key] = name
         elif key.startswith("s"):
-            face = chain.face_for_key(key)
-            if face is not None:
-                names[key] = _register_face(doc, page, face)
+            entry = chain.entry_for_key(key)
+            if entry is not None:
+                names[key] = _register_face(doc, page, entry, used.get(key, {}))
     return names
 
 
-def _register_face(doc: fitz.Document, page: fitz.Page, face: FontFace) -> str:
+def _register_face(doc: fitz.Document, page: fitz.Page, entry: _FaceEntry,
+                   used: dict[int, tuple[str, float]]) -> str:
+    face = entry.face
     name = f"PSS{face.id}"
-    xref = fontres.find_tagged_font(doc, face.id)
+    on_page = pdfobj.resource_exists(doc, page, "Font", name)
+    # The page's own resource is the usual hit; only a face new to the page scans the file.
+    xref = fontres.find_tagged_font(doc, face.id, pdfobj.ref_xref(on_page) if on_page else None)
     if xref is None:
-        xref = page.insert_font(fontname=name, fontfile=face.path)
+        xref = fontembed.insert_face(page, name, entry.file, used)
         fontres.tag_font(doc, xref, face.id)
         _rename_inserted_font(doc, xref, face)
-    elif pdfobj.resource_exists(doc, page, "Font", name) is None:
+        return name
+    if on_page is None:
         pdfobj.add_resource(doc, page, "Font", name, f"{xref} 0 R")
+    fontembed.ensure_glyphs(doc, xref, entry.file, used)
     return name
 
 
@@ -358,7 +402,7 @@ def write_lines(
     style: TextStyle,
     chain: FontChain,
 ) -> None:
-    font_names = register_fonts(doc, page, chain)
+    font_names = register_fonts(doc, page, chain, lines)
     gstate = opacity_state(doc, page, style.opacity, style.force_opacity)
     content = build_content(page, lines, style, font_names, gstate)
     pdfobj.append_content(doc, page, content)
